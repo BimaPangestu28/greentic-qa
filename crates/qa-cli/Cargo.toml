@@ -1,0 +1,20 @@
+[package]
+name = "qa-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Greentic AI <dev@greentic.ai>"]
+description = "Command line helper for QA workflows."
+license = "MIT"
+repository = "https://github.com/greentic-ai/greentic-qa"
+homepage = "https://github.com/greentic-ai/greentic-qa"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+component-qa = { workspace = true }
+qa-spec = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

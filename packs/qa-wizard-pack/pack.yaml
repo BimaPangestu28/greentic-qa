@@ -1,0 +1,23 @@
+pack_id: greentic.qa.wizard-pack
+version: 0.1.0
+kind: application
+publisher: Greentic AI
+components: []
+dependencies:
+- alias: qa
+  pack_id: io.3bridges.components.qa
+  version_req: ^1.0.0
+  required_capabilities:
+  - qa:process
+- alias: messaging
+  pack_id: io.3bridges.components.messaging
+  version_req: ^1.0.0
+  required_capabilities:
+  - messaging:emit
+- alias: templating
+  pack_id: io.3bridges.components.templating.handlebars
+  version_req: ^1.0.0
+  required_capabilities:
+  - templating:render
+flows: []
+assets: []

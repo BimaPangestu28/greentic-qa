@@ -1,0 +1,10 @@
+target/
+**/target/
+
+# Runtime / tooling artifacts
+.DS_Store
+.idea/
+.vscode/
+
+# CI artifacts
+/ci/**/build/

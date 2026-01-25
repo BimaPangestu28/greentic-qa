@@ -1,0 +1,103 @@
+id: qa_wizard
+title: QA Wizard
+description: >
+  Interactive wizard that collects FormSpec metadata and emits the generated artifacts as an event.
+type: messaging
+start: collect_metadata
+
+nodes:
+  collect_metadata:
+    qa.process:
+      welcome: |
+        Welcome to the QA wizard. This flow will gather enough information to bootstrap a FormSpec bundle.
+      questions:
+        - id: q_form_id
+          prompt: "What should the form ID be (dot-delimited)?"
+          answer_type: text
+          max_words: 3
+        - id: q_form_title
+          prompt: "Give the form a short, polite title."
+          answer_type: text
+          max_words: 10
+        - id: q_form_version
+          prompt: "What version should the form start at?"
+          answer_type: text
+          default: "0.1.0"
+        - id: q_form_description
+          prompt: "Describe the form's purpose in one or two sentences."
+          answer_type: text
+          max_words: 30
+        - id: q_form_summary
+          prompt: "One-line summary for README / help text (optional)."
+          answer_type: text
+          optional: true
+        - id: q_output_dir
+          prompt: "Where should artifacts be emitted (e.g., my-provider-setup)?"
+          answer_type: text
+          max_words: 5
+    routing:
+      - to: collect_question
+
+  collect_question:
+    qa.process:
+      welcome: |
+        Now define a representative question that will be part of the generated FormSpec.
+      questions:
+        - id: q_question_id
+          prompt: "What identifier should the question use?"
+          answer_type: text
+          max_words: 3
+        - id: q_question_prompt
+          prompt: "Write the user-facing prompt text."
+          answer_type: text
+          max_words: 25
+        - id: q_question_description
+          prompt: "Optional question description / help text."
+          answer_type: text
+          optional: true
+        - id: q_question_type
+          prompt: "Specify the answer type (string, boolean, number, enum)."
+          answer_type: text
+          default: "string"
+          max_words: 1
+        - id: q_question_required
+          prompt: "Is this question required?"
+          answer_type: boolean
+          default: true
+        - id: q_question_default
+          prompt: "Default value (optional)."
+          answer_type: text
+          optional: true
+        - id: q_question_secret
+          prompt: "Does this question capture secret data?"
+          answer_type: boolean
+          default: false
+    routing:
+      - to: emit_event
+
+  emit_event:
+    messaging.emit:
+      messages:
+        - type: qa.wizard.generated
+          payload:
+            dir_name: collect_metadata.payload.q_output_dir
+            summary_md: collect_metadata.payload.q_form_summary
+            form:
+              id: collect_metadata.payload.q_form_id
+              title: collect_metadata.payload.q_form_title
+              version: collect_metadata.payload.q_form_version
+              description: collect_metadata.payload.q_form_description
+              progress_policy:
+                skip_answered: true
+                autofill_defaults: false
+                treat_default_as_answered: false
+            questions:
+              - id: collect_question.payload.q_question_id
+                type: collect_question.payload.q_question_type
+                title: collect_question.payload.q_question_prompt
+                description: collect_question.payload.q_question_description
+                required: collect_question.payload.q_question_required
+                default_value: collect_question.payload.q_question_default
+                secret: collect_question.payload.q_question_secret
+    routing:
+      - out: true

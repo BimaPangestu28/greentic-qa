@@ -1,0 +1,28 @@
+name: Nightly E2E
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.90.0
+          override: true
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Run headless QA wizard smoke
+        shell: bash
+        run: |
+          chmod +x ci/scripts/smoke.sh
+          SMOKE_OUTPUT_DIR=nightly-output ./ci/scripts/smoke.sh

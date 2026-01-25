@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qa-spec",
+    "crates/component-qa",
+    "crates/qa-cli",
+]
+
+[workspace.package]
+name = "greentic-qa"
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+repository = "https://github.com/greentic-ai/greentic-qa"
+homepage = "https://github.com/greentic-ai/greentic-qa"
+description = "Greentic QA tooling (component-qa, qa-cli, qa-spec) for adaptive wizard flows."
+
+[workspace.dependencies]
+qa-spec = { path = "crates/qa-spec", workspace=true }
+component-qa = { path = "crates/component-qa", workspace=true  }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+handlebars = "6"
+thiserror = "2"
+regex = "1"
+globset = "0.4"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+[workspace.dev-dependencies]
+tempfile = "3"
