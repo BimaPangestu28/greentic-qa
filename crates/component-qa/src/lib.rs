@@ -9,7 +9,7 @@ use qa_spec::{
     render_text as qa_render_text, resolve_visibility, validate,
 };
 
-const DEFAULT_SPEC: &str = include_str!("../../qa-spec/tests/fixtures/simple_form.json");
+const DEFAULT_SPEC: &str = include_str!("../tests/fixtures/simple_form.json");
 
 #[derive(Debug, Error)]
 enum ComponentError {
