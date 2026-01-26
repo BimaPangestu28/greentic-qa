@@ -17,8 +17,8 @@ homepage = "https://github.com/greentic-ai/greentic-qa"
 description = "Greentic QA tooling (component-qa, qa-cli, qa-spec) for adaptive wizard flows."
 
 [workspace.dependencies]
-qa-spec = { path = "crates/qa-spec" }
-component-qa = { path = "crates/component-qa" }
+qa-spec = { path = "crates/qa-spec", version = "0.4.0" }
+component-qa = { path = "crates/component-qa", version = "0.4.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"

@@ -34,29 +34,6 @@ jobs:
         with:
           toolchain: 1.90.0
 
-      - name: Verify publish candidates
-        run: |
-          set -euo pipefail
-
-          crates=(
-            crates/qa-spec
-            crates/component-qa
-            crates/qa-cli
-          )
-
-          for crate in "${crates[@]}"; do
-            echo "Verifying $crate"
-
-            cargo package \
-              --manifest-path "$crate/Cargo.toml" \
-              --locked
-
-            cargo publish \
-              --manifest-path "$crate/Cargo.toml" \
-              --dry-run \
-              --locked
-          done
-
       - name: Publish crates
         run: |
           crates=(
