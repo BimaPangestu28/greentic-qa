@@ -1,10 +1,12 @@
 pub mod builder;
 
+mod wizard;
+
 use builder::{
     CliQuestionType, FormInput, GenerationInput, QuestionInput, build_bundle, write_bundle,
 };
-use clap::{Parser, Subcommand};
-use component_qa::{next as qa_next, render_json_ui, render_text, submit_patch};
+use clap::{Parser, Subcommand, ValueEnum};
+use component_qa::{next as qa_next, render_card as qa_render_card, render_json_ui, submit_patch};
 use qa_spec::{FormSpec, ValidationResult, validate};
 use serde_json::{Map, Number, Value, json};
 use std::env;
@@ -12,6 +14,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use wizard::{AnswerParseError, PromptContext, Verbosity, WizardPayload, WizardPresenter};
 
 type CliResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -27,6 +30,13 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum RenderMode {
+    Text,
+    Card,
+    Json,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Run the existing QA wizard flow in a text shell.
@@ -37,6 +47,12 @@ enum Command {
         /// Optional JSON file containing initial answers.
         #[arg(long, value_name = "ANSWERS")]
         answers: Option<PathBuf>,
+        /// Show debug output (statuses, visible questions, parse expectations).
+        #[arg(long)]
+        debug: bool,
+        /// Render output mode for the wizard display.
+        #[arg(long, value_enum, default_value_t = RenderMode::Text)]
+        format: RenderMode,
     },
     /// Interactive form generator that creates a bundle of derived artifacts.
     New {
@@ -73,7 +89,12 @@ enum Command {
 fn main() -> CliResult<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Wizard { spec, answers } => run_wizard(spec, answers),
+        Command::Wizard {
+            spec,
+            answers,
+            debug,
+            format,
+        } => run_wizard(spec, answers, debug, format),
         Command::New { out, force } => run_new(out, force),
         Command::Generate { input, out, force } => run_generate(input, out, force),
         Command::Validate { spec, answers } => run_validate(spec, answers),
@@ -113,15 +134,25 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
         let kind = prompt_question_type()?;
         let required = prompt_bool("Required? (Y/n)", true)?;
         let question_description = prompt_optional("Question description (optional)")?;
-        let default_value = prompt_optional("Default value (optional)")?;
         let choices = if matches!(kind, CliQuestionType::Enum) {
             Some(prompt_enum_choices()?)
         } else {
             None
         };
+        let default_prompt = default_prompt_for(kind, choices.as_deref());
+        let default_value = loop {
+            let candidate = prompt_optional(&default_prompt)?;
+            if let Some(value) = &candidate {
+                if let Err(err) = ensure_default_matches_type(kind, value, choices.as_deref()) {
+                    println!("Invalid default: {} Please try again.", err);
+                    continue;
+                }
+            }
+            break candidate;
+        };
         let secret = prompt_bool("Secret value? (y/N)", false)?;
 
-        questions.push(QuestionInput {
+        let question = QuestionInput {
             id: question_id,
             kind,
             title: question_title,
@@ -130,7 +161,14 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
             default_value,
             choices,
             secret,
-        });
+        };
+
+        if let Err(err) = validate_question_input(&question) {
+            println!("Invalid question: {}. Let's try again.", err);
+            continue;
+        }
+
+        questions.push(question);
     }
 
     if questions.is_empty() {
@@ -169,6 +207,80 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
     let bundle_dir = write_bundle(&bundle, &input, &out_root)?;
     println!("Generated QA bundle at {}", bundle_dir.display());
     Ok(())
+}
+
+fn validate_question_input(question: &QuestionInput) -> Result<(), String> {
+    if matches!(question.kind, CliQuestionType::Enum) {
+        let has_choices = question
+            .choices
+            .as_ref()
+            .map(|choices| !choices.is_empty())
+            .unwrap_or(false);
+        if !has_choices {
+            return Err("enum questions require at least one comma-separated choice".into());
+        }
+    }
+
+    if let Some(default_value) = &question.default_value {
+        ensure_default_matches_type(question.kind, default_value, question.choices.as_deref())?;
+    }
+
+    Ok(())
+}
+
+fn ensure_default_matches_type(
+    kind: CliQuestionType,
+    default: &str,
+    choices: Option<&[String]>,
+) -> Result<(), String> {
+    match kind {
+        CliQuestionType::Boolean => parse_boolean_default(default),
+        CliQuestionType::Integer => parse_integer_default(default),
+        CliQuestionType::Number => parse_number_default(default),
+        CliQuestionType::Enum => parse_enum_default(default, choices),
+        CliQuestionType::String => Ok(()),
+    }
+}
+
+fn parse_boolean_default(raw: &str) -> Result<(), String> {
+    match raw.to_lowercase().as_str() {
+        "true" | "t" | "yes" | "y" | "1" | "false" | "f" | "no" | "n" | "0" => Ok(()),
+        _ => Err("Boolean default must be yes/no/true/false/1/0.".into()),
+    }
+}
+
+fn parse_integer_default(raw: &str) -> Result<(), String> {
+    raw.parse::<i64>().map(|_| ()).map_err(|_| {
+        "Default value for integer questions must be a whole number (leave blank to skip).".into()
+    })
+}
+
+fn parse_number_default(raw: &str) -> Result<(), String> {
+    raw.parse::<f64>()
+        .map_err(|_| {
+            "Default value for number questions must be numeric (leave blank to skip).".into()
+        })
+        .and_then(|value| {
+            if value.is_finite() {
+                Ok(())
+            } else {
+                Err("Default number must be finite.".into())
+            }
+        })
+}
+
+fn parse_enum_default(raw: &str, choices: Option<&[String]>) -> Result<(), String> {
+    let choices = choices.ok_or_else(|| {
+        "Enum default cannot be validated because no choices were provided.".to_string()
+    })?;
+    if choices.iter().any(|choice| choice == raw) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Default must match one of the choices: {}.",
+            choices.join(", ")
+        ))
+    }
 }
 
 fn run_generate(input_path: PathBuf, out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
@@ -323,7 +435,12 @@ fn canonicalize_target(path: &Path) -> CliResult<PathBuf> {
     Ok(cwd.join(path))
 }
 
-fn run_wizard(spec_path: PathBuf, answers_path: Option<PathBuf>) -> CliResult<()> {
+fn run_wizard(
+    spec_path: PathBuf,
+    answers_path: Option<PathBuf>,
+    debug: bool,
+    format: RenderMode,
+) -> CliResult<()> {
     let spec_str = fs::read_to_string(&spec_path)?;
     let spec_value: Value = serde_json::from_str(&spec_str)?;
     let form_id = spec_value
@@ -339,22 +456,34 @@ fn run_wizard(spec_path: PathBuf, answers_path: Option<PathBuf>) -> CliResult<()
         Value::Object(Map::new())
     };
 
+    let mut presenter = WizardPresenter::new(Verbosity::from_debug(debug));
+
     loop {
         let answers_str = answers.to_string();
-        println!("{}", render_text(form_id, &config_json, "{}", &answers_str));
-
         let next_value = parse_component_result(&qa_next(form_id, &config_json, &answers_str))?;
         if next_value["status"] == "complete" {
+            presenter.show_completion(&answers);
             break;
         }
         let question_id = next_value["next_question_id"]
             .as_str()
-            .ok_or("wizard failed to return a next question")?;
+            .ok_or("wizard failed to return a next question")?
+            .to_string();
 
-        let ui =
-            parse_component_result(&render_json_ui(form_id, &config_json, "{}", &answers_str))?;
-        let question = find_question(&ui, question_id)?;
-        let answer = prompt_question(question)?;
+        let ui_raw = render_json_ui(form_id, &config_json, "{}", &answers_str);
+        let ui = parse_component_result(&ui_raw)?;
+        print_render_output(format, form_id, &config_json, &answers_str, Some(&ui_raw))?;
+        let payload =
+            WizardPayload::from_json(&ui).map_err(|err| format!("wizard UI error: {}", err))?;
+        presenter.show_header(&payload);
+        presenter.show_status(&payload);
+
+        let question = find_question(&ui, &question_id)?;
+        let question_info = payload
+            .question(&question_id)
+            .ok_or_else(|| format!("wizard payload missing question '{}'", question_id))?;
+        let prompt = PromptContext::new(question_info, &payload.progress);
+        let answer = prompt_question(&prompt, &question, &presenter)?;
 
         let value_json = serde_json::to_string(&answer)?;
         let submit_value = parse_component_result(&submit_patch(
@@ -362,22 +491,28 @@ fn run_wizard(spec_path: PathBuf, answers_path: Option<PathBuf>) -> CliResult<()
             &config_json,
             "{}",
             &answers_str,
-            question_id,
+            &question_id,
             &value_json,
         ))?;
+        let validation = gather_validation_details(&submit_value);
 
         if submit_value["status"] == "error" {
-            print_validation_errors(&submit_value)?;
-            continue;
+            if !validation.errors.is_empty() || !validation.unknown_fields.is_empty() {
+                print_validation_errors(&validation)?;
+                continue;
+            }
+            if !validation.missing_required.is_empty() {
+                print_validation_errors(&validation)?;
+            }
         }
 
         answers = submit_value["answers"].clone();
         if submit_value["status"] == "complete" {
+            presenter.show_completion(&answers);
             break;
         }
     }
 
-    println!("Wizard complete! Final answers:\n{}", answers);
     Ok(())
 }
 
@@ -404,46 +539,31 @@ fn find_question(ui: &Value, question_id: &str) -> CliResult<Value> {
     Ok(question)
 }
 
-fn prompt_question(question: Value) -> CliResult<Value> {
+fn prompt_question(
+    prompt: &PromptContext,
+    question: &Value,
+    presenter: &WizardPresenter,
+) -> CliResult<Value> {
     loop {
-        if let Some(title) = question.get("title").and_then(Value::as_str) {
-            println!("Question: {}", title);
-        }
-        if let Some(description) = question.get("description").and_then(Value::as_str) {
-            println!("{}", description);
-        }
-        if let Some(choices) = question.get("choices").and_then(Value::as_array)
-            && !choices.is_empty()
-        {
-            println!(
-                "Choices: {}",
-                choices
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-
+        presenter.show_prompt(prompt);
         print!("> ");
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
 
-        if input.trim().eq_ignore_ascii_case("exit") {
+        let trimmed = input.trim();
+        if trimmed.eq_ignore_ascii_case("exit") {
             return Err("wizard aborted by user".into());
         }
 
-        match parse_answer(&question, input.trim()) {
+        match parse_answer(question, trimmed) {
             Ok(value) => return Ok(value),
-            Err(err) => {
-                eprintln!("Invalid answer: {}", err);
-            }
+            Err(err) => presenter.show_parse_error(&err),
         }
     }
 }
 
-fn parse_answer(question: &Value, raw: &str) -> Result<Value, String> {
+fn parse_answer(question: &Value, raw: &str) -> Result<Value, AnswerParseError> {
     let prompt_value = if raw.is_empty() {
         question
             .get("default")
@@ -463,7 +583,10 @@ fn parse_answer(question: &Value, raw: &str) -> Result<Value, String> {
         {
             return Ok(Value::Null);
         }
-        return Err("answer required".into());
+        return Err(AnswerParseError::new(
+            "This question requires an answer.",
+            None,
+        ));
     }
 
     match question
@@ -479,43 +602,71 @@ fn parse_answer(question: &Value, raw: &str) -> Result<Value, String> {
     }
 }
 
-fn parse_boolean(raw: &str) -> Result<Value, String> {
+fn parse_boolean(raw: &str) -> Result<Value, AnswerParseError> {
     match raw.to_lowercase().as_str() {
         "true" | "t" | "yes" | "y" | "1" => Ok(Value::Bool(true)),
         "false" | "f" | "no" | "n" | "0" => Ok(Value::Bool(false)),
-        _ => Err("expected boolean (y/n/true/false)".into()),
+        _ => Err(AnswerParseError::new(
+            "Please enter yes or no.",
+            Some("expected boolean (y/n/true/false)".to_string()),
+        )),
     }
 }
 
-fn parse_integer(raw: &str) -> Result<Value, String> {
+fn parse_integer(raw: &str) -> Result<Value, AnswerParseError> {
     raw.parse::<i64>()
         .map(Number::from)
         .map(Value::Number)
-        .map_err(|_| "expected integer".into())
-}
-
-fn parse_number(raw: &str) -> Result<Value, String> {
-    raw.parse::<f64>()
-        .map_err(|_| "expected number".into())
-        .and_then(|value| {
-            serde_json::Number::from_f64(value)
-                .map(Value::Number)
-                .ok_or_else(|| "number must be finite".into())
+        .map_err(|_| {
+            AnswerParseError::new(
+                "Please enter a whole number.",
+                Some("expected integer".to_string()),
+            )
         })
 }
 
-fn parse_enum(question: &Value, raw: &str) -> Result<Value, String> {
+fn parse_number(raw: &str) -> Result<Value, AnswerParseError> {
+    raw.parse::<f64>()
+        .map_err(|_| {
+            AnswerParseError::new(
+                "Please enter a number.",
+                Some("expected number".to_string()),
+            )
+        })
+        .and_then(|value| {
+            serde_json::Number::from_f64(value)
+                .map(Value::Number)
+                .ok_or_else(|| {
+                    AnswerParseError::new(
+                        "Please enter a finite number.",
+                        Some("number must be finite".to_string()),
+                    )
+                })
+        })
+}
+
+fn parse_enum(question: &Value, raw: &str) -> Result<Value, AnswerParseError> {
     let choices = question
         .get("choices")
         .and_then(Value::as_array)
-        .ok_or_else(|| "enum choices missing".to_string())?;
+        .ok_or_else(|| AnswerParseError::new("Choices are not defined for this question.", None))?;
 
-    let allowed = choices.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+    let allowed = choices
+        .iter()
+        .filter_map(Value::as_str)
+        .map(String::from)
+        .collect::<Vec<_>>();
 
-    if allowed.iter().any(|choice| choice == &raw) {
-        Ok(Value::String(raw.to_string()))
+    if let Some(choice) = allowed
+        .iter()
+        .find(|choice| choice.eq_ignore_ascii_case(raw))
+    {
+        Ok(Value::String(choice.to_string()))
     } else {
-        Err(format!("answer must be one of: {}", allowed.join(", ")))
+        Err(AnswerParseError::new(
+            format!("Choose one of: {}.", allowed.join(", ")),
+            Some(format!("allowed values: {}", allowed.join(", "))),
+        ))
     }
 }
 
@@ -589,7 +740,7 @@ fn prompt_question_type() -> CliResult<CliQuestionType> {
 
 fn prompt_enum_choices() -> CliResult<Vec<String>> {
     loop {
-        let raw = prompt_line("Comma separated choices", None)?;
+        let raw = prompt_line("Comma separated choices (e.g. alpha,beta,gamma)", None)?;
         let normalized = raw
             .split(',')
             .map(str::trim)
@@ -604,26 +755,133 @@ fn prompt_enum_choices() -> CliResult<Vec<String>> {
     }
 }
 
-fn print_validation_errors(response: &Value) -> CliResult<()> {
-    if let Some(errors) = response
-        .get("validation")
+fn default_prompt_for(kind: CliQuestionType, choices: Option<&[String]>) -> String {
+    match kind {
+        CliQuestionType::Boolean => "Default value (yes/no or leave blank for optional)".into(),
+        CliQuestionType::Integer => "Default value (optional, enter a whole number)".into(),
+        CliQuestionType::Number => "Default value (optional, enter a number)".into(),
+        CliQuestionType::Enum => match choices {
+            Some(choices) if !choices.is_empty() => {
+                format!("Default value (optional, one of {})", choices.join("/"))
+            }
+            _ => "Default value (optional, match one of the provided choices)".into(),
+        },
+        _ => "Default value (optional)".into(),
+    }
+}
+
+struct ValidationDetails {
+    errors: Vec<(String, String)>,
+    missing_required: Vec<String>,
+    unknown_fields: Vec<String>,
+}
+
+fn gather_validation_details(response: &Value) -> ValidationDetails {
+    let validation = response.get("validation");
+
+    let errors = validation
         .and_then(|value| value.get("errors"))
         .and_then(Value::as_array)
-    {
+        .map(|array| {
+            array
+                .iter()
+                .map(|error| {
+                    let path = error
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("<unknown>")
+                        .to_string();
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("validation failed")
+                        .to_string();
+                    (path, message)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let missing_required = validation
+        .and_then(|value| value.get("missing_required"))
+        .and_then(Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let unknown_fields = validation
+        .and_then(|value| value.get("unknown_fields"))
+        .and_then(Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ValidationDetails {
+        errors,
+        missing_required,
+        unknown_fields,
+    }
+}
+
+fn print_validation_errors(details: &ValidationDetails) -> CliResult<()> {
+    if !details.errors.is_empty() {
         eprintln!("Validation errors:");
-        for error in errors {
-            let path = error
-                .get("path")
-                .and_then(Value::as_str)
-                .unwrap_or("<unknown>");
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("validation failed");
+        for (path, message) in &details.errors {
             eprintln!("  {}: {}", path, message);
         }
     }
+
+    if !details.missing_required.is_empty() {
+        eprintln!(
+            "Missing required answers for: {}",
+            details.missing_required.join(", ")
+        );
+    }
+
+    if !details.unknown_fields.is_empty() {
+        eprintln!(
+            "Unknown answer fields: {}",
+            details.unknown_fields.join(", ")
+        );
+    }
+
     Ok(())
+}
+
+fn print_render_output(
+    mode: RenderMode,
+    form_id: &str,
+    config_json: &str,
+    answers_json: &str,
+    ui: Option<&str>,
+) -> CliResult<()> {
+    match mode {
+        RenderMode::Text => Ok(()),
+        RenderMode::Card => {
+            let card = qa_render_card(form_id, config_json, "{}", answers_json);
+            println!("Adaptive card:\n{}", card);
+            Ok(())
+        }
+        RenderMode::Json => {
+            if let Some(ui) = ui {
+                println!("JSON UI:\n{}", ui);
+            } else {
+                let json_ui = render_json_ui(form_id, config_json, "{}", answers_json);
+                println!("JSON UI:\n{}", json_ui);
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -633,7 +891,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    use crate::builder::{GenerationInput, build_bundle, write_bundle};
+    use crate::builder::{GenerationInput, QuestionInput, build_bundle, write_bundle};
     use serde_json::from_str;
 
     #[test]
@@ -711,5 +969,44 @@ mod tests {
             fs::read_to_string(forms_dir.join("smoke-form.form.json")).expect("read spec file");
         let spec_value: Value = serde_json::from_str(&spec_contents).expect("spec file JSON");
         assert_eq!(spec_value["id"].as_str(), Some("smoke-form"));
+    }
+
+    #[test]
+    fn default_validation_accepts_boolean_values() {
+        assert!(ensure_default_matches_type(CliQuestionType::Boolean, "y", None).is_ok());
+        assert!(ensure_default_matches_type(CliQuestionType::Boolean, "false", None).is_ok());
+        assert!(ensure_default_matches_type(CliQuestionType::Boolean, "maybe", None).is_err());
+    }
+
+    #[test]
+    fn default_validation_requires_numeric_defaults() {
+        assert!(ensure_default_matches_type(CliQuestionType::Integer, "0", None).is_ok());
+        assert!(ensure_default_matches_type(CliQuestionType::Integer, "1.5", None).is_err());
+        assert!(ensure_default_matches_type(CliQuestionType::Number, "1.5", None).is_ok());
+        assert!(ensure_default_matches_type(CliQuestionType::Number, "bad", None).is_err());
+    }
+
+    #[test]
+    fn default_validation_checks_enum_choice() {
+        let choices = vec!["one".into(), "two".into()];
+        assert!(ensure_default_matches_type(CliQuestionType::Enum, "one", Some(&choices)).is_ok());
+        assert!(
+            ensure_default_matches_type(CliQuestionType::Enum, "three", Some(&choices)).is_err()
+        );
+    }
+
+    #[test]
+    fn validate_question_input_rejects_bad_boolean_default() {
+        let question = QuestionInput {
+            id: "bool".into(),
+            kind: CliQuestionType::Boolean,
+            title: "Bool".into(),
+            description: None,
+            required: true,
+            default_value: Some("we".into()),
+            choices: None,
+            secret: false,
+        };
+        assert!(validate_question_input(&question).is_err());
     }
 }

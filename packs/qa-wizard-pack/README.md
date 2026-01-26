@@ -49,7 +49,7 @@ Downstream systems consume the `qa.wizard.generated` event emitted by `emit_even
 }
 ```
 
-Use `qa-cli generate --input <event>.json --out <dir>` (see `ci/scripts/smoke.sh`) to digest the event and emit the normalized `forms/`, `flows/`, `examples/`, and `schemas/` artifacts. The CLI respects `QA_WIZARD_OUTPUT_DIR` for dev-mode persistence and `QA_WIZARD_ALLOWED_ROOTS` to restrict where files can be written; add `--force` if you intentionally want to overwrite previous bundles.
+Use `greentic-qa generate --input <event>.json --out <dir>` (see `ci/scripts/smoke.sh`) to digest the event and emit the normalized `forms/`, `flows/`, `examples/`, and `schemas/` artifacts. The CLI respects `QA_WIZARD_OUTPUT_DIR` for dev-mode persistence and `QA_WIZARD_ALLOWED_ROOTS` to restrict where files can be written; add `--force` if you intentionally want to overwrite previous bundles.
 
 ## Local iteration
 

@@ -1,5 +1,5 @@
 [package]
-name = "qa-cli"
+name = "greentic-qa"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

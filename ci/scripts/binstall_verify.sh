@@ -3,9 +3,9 @@ set -euo pipefail
 
 if [[ "${SKIP_BINSTALL:-false}" != "true" ]]; then
   if command -v cargo-binstall >/dev/null 2>&1; then
-    cargo binstall --no-confirm qa-cli || echo "cargo binstall reported an error (ignored for now)"
+    cargo binstall --no-confirm greentic-qa || echo "cargo binstall reported an error (ignored for now)"
   else
-    echo "cargo-binstall not installed; install to verify qa-cli distribution"
+    echo "cargo-binstall not installed; install to verify greentic-qa distribution"
   fi
 else
   echo "SKIP_BINSTALL=true; skipping cargo binstall verification"

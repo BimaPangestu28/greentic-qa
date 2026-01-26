@@ -8,13 +8,13 @@ members = [
 
 [workspace.package]
 name = "greentic-qa"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 license = "MIT"
 rust-version = "1.90"
 repository = "https://github.com/greentic-ai/greentic-qa"
 homepage = "https://github.com/greentic-ai/greentic-qa"
-description = "Greentic QA tooling (component-qa, qa-cli, qa-spec) for adaptive wizard flows."
+description = "Greentic QA tooling (component-qa, greentic-qa, qa-spec) for adaptive wizard flows."
 
 [workspace.dependencies]
 qa-spec = { path = "crates/qa-spec", version = "0.4.0" }

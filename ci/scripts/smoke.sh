@@ -7,8 +7,8 @@ SMOKE_INPUT=${SMOKE_INPUT:-ci/fixtures/sample_form_generation.json}
 rm -rf "$SMOKE_OUTPUT_DIR"
 mkdir -p "$SMOKE_OUTPUT_DIR"
 
-cargo run -p qa-cli -- --help
-cargo run -p qa-cli -- generate --input "$SMOKE_INPUT" --out "$SMOKE_OUTPUT_DIR"
+cargo run -p greentic-qa -- --help
+cargo run -p greentic-qa -- generate --input "$SMOKE_INPUT" --out "$SMOKE_OUTPUT_DIR"
 
 BUNDLE_NAME=$(python3 - "$SMOKE_INPUT" <<'PY'
 import json, sys
