@@ -15,5 +15,5 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-qa-spec = { path = "../qa-spec", version = "0.4.0" }
+qa-spec = { workspace = true }
 thiserror = { workspace = true }
