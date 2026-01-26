@@ -36,16 +36,40 @@ jobs:
 
       - name: Verify publish candidates
         run: |
+          set -euxo pipefail
+
+          echo "cargo: $(command -v cargo)"
+          cargo -V
+          rustc -V
+          echo "pwd: $(pwd)"
+          ls -la
+
           crates=(
             crates/qa-spec
             crates/component-qa
             crates/qa-cli
           )
+
           for crate in "${crates[@]}"; do
+            echo "=============================="
+            echo "DRY-RUN PUBLISH: $crate"
+            echo "=============================="
+
+            cargo metadata --format-version 1 --manifest-path "$crate/Cargo.toml" | head -c 2000 || true
+            echo ""
+
+            cargo package \
+              --manifest-path "$crate/Cargo.toml" \
+              --locked \
+              -vv \
+              2>&1 | tee "/tmp/package-$(basename "$crate").log"
+
             cargo publish \
               --manifest-path "$crate/Cargo.toml" \
               --dry-run \
-              --locked
+              --locked \
+              -vv \
+              2>&1 | tee "/tmp/publish-$(basename "$crate").log"
           done
 
       - name: Publish crates
