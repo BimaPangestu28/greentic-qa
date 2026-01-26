@@ -42,10 +42,10 @@ impl WizardPresenter {
             return;
         }
         println!("Form: {}", payload.form_title);
-        if self.verbosity.is_debug() {
-            if let Some(help) = &payload.help {
-                println!("Help: {}", help);
-            }
+        if self.verbosity.is_debug()
+            && let Some(help) = &payload.help
+        {
+            println!("Help: {}", help);
         }
         self.header_printed = true;
     }
@@ -99,10 +99,10 @@ impl WizardPresenter {
 
     pub fn show_parse_error(&self, error: &AnswerParseError) {
         eprintln!("Invalid answer: {}", error.user_message);
-        if self.verbosity.is_debug() {
-            if let Some(debug) = &error.debug_message {
-                eprintln!("  Debug: {}", debug);
-            }
+        if self.verbosity.is_debug()
+            && let Some(debug) = &error.debug_message
+        {
+            eprintln!("  Debug: {}", debug);
         }
     }
 

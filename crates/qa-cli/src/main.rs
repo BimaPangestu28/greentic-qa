@@ -142,11 +142,11 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
         let default_prompt = default_prompt_for(kind, choices.as_deref());
         let default_value = loop {
             let candidate = prompt_optional(&default_prompt)?;
-            if let Some(value) = &candidate {
-                if let Err(err) = ensure_default_matches_type(kind, value, choices.as_deref()) {
-                    println!("Invalid default: {} Please try again.", err);
-                    continue;
-                }
+            if let Some(value) = &candidate
+                && let Err(err) = ensure_default_matches_type(kind, value, choices.as_deref())
+            {
+                println!("Invalid default: {} Please try again.", err);
+                continue;
             }
             break candidate;
         };

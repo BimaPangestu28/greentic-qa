@@ -22,7 +22,7 @@ jobs:
           targets: wasm32-wasip2
 
       - name: Cargo fmt
-        run: cargo fmt --workspace -- --check
+        run: cargo fmt --all -- --check
 
       - name: Cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
