@@ -297,7 +297,8 @@ fn allowed_roots() -> CliResult<Vec<PathBuf>> {
     }
 
     if canonical_roots.is_empty() {
-        canonical_roots.push(env::current_dir()?);
+        let cwd = env::current_dir()?;
+        canonical_roots.push(cwd.canonicalize().unwrap_or(cwd));
     }
 
     Ok(canonical_roots)
