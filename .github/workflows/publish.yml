@@ -36,16 +36,29 @@ jobs:
 
       - name: Publish crates
         run: |
-          crates=(
+          set -euo pipefail
+
+          crate_paths=(
             crates/qa-spec
             crates/component-qa
             crates/qa-cli
           )
-          for crate in "${crates[@]}"; do
-            cargo publish \
+
+          for crate in "${crate_paths[@]}"; do
+            echo "Publishing $crate"
+            if ! output=$(cargo publish \
               --manifest-path "$crate/Cargo.toml" \
               --token "$CARGO_REGISTRY_TOKEN" \
-              --locked
+              --locked 2>&1); then
+              echo "$output"
+              if echo "$output" | grep -q "already exists on crates.io index"; then
+                echo "$crate already published; skipping."
+                continue
+              fi
+              exit 1
+            else
+              echo "$output"
+            fi
           done
 
   binstall_matrix:
