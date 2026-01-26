@@ -36,20 +36,30 @@ jobs:
 
       - name: Verify publish candidates
         run: |
-          for crate in crates/qa-spec crates/component-qa crates/qa-cli; do
-            (
-              cd "$crate"
-              cargo publish --dry-run
-            )
+          crates=(
+            crates/qa-spec
+            crates/component-qa
+            crates/qa-cli
+          )
+          for crate in "${crates[@]}"; do
+            cargo publish \
+              --manifest-path "$crate/Cargo.toml" \
+              --dry-run \
+              --locked
           done
 
       - name: Publish crates
         run: |
-          for crate in crates/qa-spec crates/component-qa crates/qa-cli; do
-            (
-              cd "$crate"
-              cargo publish --token "$CARGO_REGISTRY_TOKEN"
-            )
+          crates=(
+            crates/qa-spec
+            crates/component-qa
+            crates/qa-cli
+          )
+          for crate in "${crates[@]}"; do
+            cargo publish \
+              --manifest-path "$crate/Cargo.toml" \
+              --token "$CARGO_REGISTRY_TOKEN" \
+              --locked
           done
 
   binstall_matrix:
@@ -86,12 +96,15 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-binstall
-          version: latest
+
+      - name: Inspect scripts directory
+        run: |
+          bash --version
+          pwd
+          ls -la ci/scripts
 
       - name: Run binstall verification
-        run: |
-          chmod +x ci/scripts/binstall_verify.sh
-          ./ci/scripts/binstall_verify.sh
+        run: bash ci/scripts/binstall_verify.sh
 
   smoke:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master' }}
@@ -107,5 +120,7 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          chmod +x ci/scripts/smoke.sh
-          ./ci/scripts/smoke.sh
+          bash --version
+          pwd
+          ls -la ci/scripts
+          bash ci/scripts/smoke.sh

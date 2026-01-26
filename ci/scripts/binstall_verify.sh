@@ -11,4 +11,4 @@ else
   echo "SKIP_BINSTALL=true; skipping cargo binstall verification"
 fi
 
-./ci/scripts/smoke.sh
+bash ci/scripts/smoke.sh
