@@ -31,5 +31,6 @@ fn example_for(question: &QuestionSpec) -> Value {
         QuestionType::Number => {
             Value::Number(Number::from_f64(1.0).unwrap_or_else(|| Number::from(1)))
         }
+        QuestionType::List => Value::Array(Vec::new()),
     }
 }

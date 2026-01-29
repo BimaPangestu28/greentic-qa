@@ -20,6 +20,7 @@ fn build_progress_form() -> FormSpec {
         }),
         secrets_policy: None,
         store: vec![],
+        validations: vec![],
         questions: vec![
             QuestionSpec {
                 id: "q1".into(),
@@ -32,7 +33,10 @@ fn build_progress_form() -> FormSpec {
                 secret: false,
                 visible_if: None,
                 constraint: None,
+                list: None,
                 policy: Default::default(),
+                computed: None,
+                computed_overridable: false,
             },
             QuestionSpec {
                 id: "q2".into(),
@@ -45,7 +49,10 @@ fn build_progress_form() -> FormSpec {
                 secret: false,
                 visible_if: None,
                 constraint: None,
+                list: None,
                 policy: Default::default(),
+                computed: None,
+                computed_overridable: false,
             },
         ],
     }

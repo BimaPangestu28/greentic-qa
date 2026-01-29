@@ -1,8 +1,8 @@
+use crate::spec::question::QuestionSpec;
+use crate::spec::validation::CrossFieldValidation;
 use crate::store::StoreOp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::spec::question::QuestionSpec;
 
 /// Presentation hints for a form.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -55,5 +55,7 @@ pub struct FormSpec {
     pub secrets_policy: Option<SecretsPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub store: Vec<StoreOp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validations: Vec<CrossFieldValidation>,
     pub questions: Vec<QuestionSpec>,
 }

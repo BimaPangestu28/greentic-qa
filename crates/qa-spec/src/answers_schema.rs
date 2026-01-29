@@ -59,6 +59,34 @@ fn question_schema(question: &QuestionSpec) -> Value {
                 );
             }
         }
+        QuestionType::List => {
+            schema.insert("type".into(), Value::String("array".into()));
+            if let Some(list) = &question.list {
+                if let Some(min_items) = list.min_items {
+                    schema.insert("minItems".into(), Value::Number(min_items.into()));
+                }
+                if let Some(max_items) = list.max_items {
+                    schema.insert("maxItems".into(), Value::Number(max_items.into()));
+                }
+                let mut item_props = Map::new();
+                let mut required_fields = Vec::new();
+                for field in &list.fields {
+                    item_props.insert(field.id.clone(), question_schema(field));
+                    if field.required {
+                        required_fields.push(Value::String(field.id.clone()));
+                    }
+                }
+                let mut item_schema = Map::new();
+                item_schema.insert("type".into(), Value::String("object".into()));
+                item_schema.insert("properties".into(), Value::Object(item_props));
+                if !required_fields.is_empty() {
+                    item_schema.insert("required".into(), Value::Array(required_fields));
+                }
+                schema.insert("items".into(), Value::Object(item_schema));
+            } else {
+                schema.insert("items".into(), Value::Object(Map::new()));
+            }
+        }
     }
 
     if let Some(Constraint {

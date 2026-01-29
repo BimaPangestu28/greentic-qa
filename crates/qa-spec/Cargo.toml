@@ -17,3 +17,4 @@ handlebars = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 globset = { workspace = true }
+serde_cbor = { workspace = true }

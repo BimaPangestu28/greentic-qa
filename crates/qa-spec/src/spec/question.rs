@@ -12,6 +12,7 @@ pub enum QuestionType {
     Integer,
     Number,
     Enum,
+    List,
 }
 
 /// Constraints that can be enforced per question.
@@ -50,8 +51,14 @@ pub struct QuestionSpec {
     pub visible_if: Option<Expr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraint: Option<Constraint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ListSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computed: Option<Expr>,
     #[serde(default)]
     pub policy: QuestionPolicy,
+    #[serde(default)]
+    pub computed_overridable: bool,
 }
 
 /// Per-question overrides for progress behavior.
@@ -61,4 +68,15 @@ pub struct QuestionPolicy {
     pub skip_if_present_in: Vec<StoreTarget>,
     #[serde(default)]
     pub editable_if_from_default: bool,
+}
+
+/// Definition of a repeatable list whose entries reuse question definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ListSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<QuestionSpec>,
 }

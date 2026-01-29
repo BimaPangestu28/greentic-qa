@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_cbor::{to_vec, value::to_value};
 use serde_json::Value;
 
 /// Optional metadata paired with an `AnswerSet`.
@@ -30,6 +31,17 @@ impl AnswerSet {
             answers: Value::Object(Default::default()),
             meta: None,
         }
+    }
+
+    /// Serializes the answers set as canonical CBOR bytes.
+    pub fn to_cbor(&self) -> Result<Vec<u8>, serde_cbor::Error> {
+        let canonical = to_value(self)?;
+        to_vec(&canonical)
+    }
+
+    /// Serializes the answers set as indented JSON for debugging.
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
     }
 }
 

@@ -20,6 +20,7 @@ fn build_sample_form() -> qa_spec::FormSpec {
         progress_policy: None,
         secrets_policy: None,
         store: vec![],
+        validations: vec![],
         questions: vec![QuestionSpec {
             id: "q1".into(),
             kind: QuestionType::String,
@@ -31,7 +32,10 @@ fn build_sample_form() -> qa_spec::FormSpec {
             secret: false,
             visible_if: None,
             constraint: None,
+            list: None,
             policy: Default::default(),
+            computed: None,
+            computed_overridable: false,
         }],
     }
 }
@@ -70,6 +74,7 @@ fn resolve_string_relaxed_keeps_missing_tokens() {
                 progress_policy: None,
                 secrets_policy: None,
                 store: vec![],
+                validations: vec![],
                 questions: vec![],
             },
             &ctx,

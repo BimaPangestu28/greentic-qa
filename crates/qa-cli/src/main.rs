@@ -3,11 +3,15 @@ pub mod builder;
 mod wizard;
 
 use builder::{
-    CliQuestionType, FormInput, GenerationInput, QuestionInput, build_bundle, write_bundle,
+    CliQuestionType, FormInput, GeneratedBundle, GenerationInput, ListInput, QuestionInput,
+    build_bundle, write_bundle,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use component_qa::{next as qa_next, render_card as qa_render_card, render_json_ui, submit_patch};
-use qa_spec::{FormSpec, ValidationResult, validate};
+use qa_spec::{
+    AnswerSet, FormSpec, ValidationResult, expr::Expr, spec::question::Constraint,
+    spec::validation::CrossFieldValidation, validate,
+};
 use serde_json::{Map, Number, Value, json};
 use std::env;
 use std::fs;
@@ -47,9 +51,12 @@ enum Command {
         /// Optional JSON file containing initial answers.
         #[arg(long, value_name = "ANSWERS")]
         answers: Option<PathBuf>,
-        /// Show debug output (statuses, visible questions, parse expectations).
+        /// Show verbose output (statuses, visible questions, parse expectations).
+        #[arg(long, alias = "debug")]
+        verbose: bool,
+        /// Also emit answer JSON for debugging.
         #[arg(long)]
-        debug: bool,
+        answers_json: bool,
         /// Render output mode for the wizard display.
         #[arg(long, value_enum, default_value_t = RenderMode::Text)]
         format: RenderMode,
@@ -62,6 +69,9 @@ enum Command {
         /// Overwrite existing bundle if present.
         #[arg(long)]
         force: bool,
+        /// Show internal bundle data for debugging.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Non-interactive generator that consumes JSON answers and emits the bundle.
     Generate {
@@ -74,6 +84,9 @@ enum Command {
         /// Overwrite existing bundle if present.
         #[arg(long)]
         force: bool,
+        /// Show internal bundle data for debugging.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Validate answers against a generated FormSpec.
     Validate {
@@ -92,23 +105,33 @@ fn main() -> CliResult<()> {
         Command::Wizard {
             spec,
             answers,
-            debug,
+            verbose,
+            answers_json,
             format,
-        } => run_wizard(spec, answers, debug, format),
-        Command::New { out, force } => run_new(out, force),
-        Command::Generate { input, out, force } => run_generate(input, out, force),
+        } => run_wizard(spec, answers, verbose, answers_json, format),
+        Command::New {
+            out,
+            force,
+            verbose,
+        } => run_new(out, force, verbose),
+        Command::Generate {
+            input,
+            out,
+            force,
+            verbose,
+        } => run_generate(input, out, force, verbose),
         Command::Validate { spec, answers } => run_validate(spec, answers),
     }
 }
 
-fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
+fn run_new(out_dir: Option<PathBuf>, force: bool, verbose: bool) -> CliResult<()> {
     println!("Interactive QA form generator");
-    let form_id = prompt_non_empty("Form ID (dot-delimited)", None)?;
-    let title = prompt_non_empty("Form title", None)?;
-    let version = prompt_non_empty("Form version", Some("0.1.0"))?;
+    let form_id = prompt_non_empty(&mark_required("Form ID (dot-delimited)"), None)?;
+    let title = prompt_non_empty(&mark_required("Form title"), None)?;
+    let version = prompt_non_empty(&mark_required("Form version"), Some("0.1.0"))?;
     let description = prompt_optional("Description (optional)")?;
     let summary = prompt_optional("Summary for README (optional)")?;
-    let dir_name = prompt_non_empty("Output directory name", Some(&form_id))?;
+    let dir_name = prompt_non_empty(&mark_required("Output directory name"), Some(&form_id))?;
 
     let mut questions = Vec::new();
     loop {
@@ -130,9 +153,10 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
             None => break,
         };
 
-        let question_title = prompt_non_empty("Question title", Some(&question_id))?;
+        let question_title =
+            prompt_non_empty(&mark_required("Question title"), Some(&question_id))?;
         let kind = prompt_question_type()?;
-        let required = prompt_bool("Required? (Y/n)", true)?;
+        let required = prompt_bool("Required?", true)?;
         let question_description = prompt_optional("Question description (optional)")?;
         let choices = if matches!(kind, CliQuestionType::Enum) {
             Some(prompt_enum_choices()?)
@@ -145,12 +169,24 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
             if let Some(value) = &candidate
                 && let Err(err) = ensure_default_matches_type(kind, value, choices.as_deref())
             {
-                println!("Invalid default: {} Please try again.", err);
+                let hint = describe_type_hint(kind, choices.as_deref(), None);
+                println!(
+                    "Invalid default: {} Expected {} (e.g., {}). Please try again.",
+                    err, hint.expected, hint.example
+                );
                 continue;
             }
             break candidate;
         };
-        let secret = prompt_bool("Secret value? (y/N)", false)?;
+        let secret = prompt_bool("Secret value?", false)?;
+        let list = if matches!(kind, CliQuestionType::List) {
+            Some(prompt_list_input()?)
+        } else {
+            None
+        };
+        let visible_if = prompt_visibility_condition(&questions)?;
+        let constraint = prompt_constraint(kind)?;
+        let (computed, computed_overridable) = prompt_computed_field(kind, &questions)?;
 
         let question = QuestionInput {
             id: question_id,
@@ -161,10 +197,20 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
             default_value,
             choices,
             secret,
+            list,
+            visible_if,
+            constraint,
+            computed,
+            computed_overridable,
         };
 
         if let Err(err) = validate_question_input(&question) {
-            println!("Invalid question: {}. Let's try again.", err);
+            let list_fields = question.list.as_ref().map(|list| list.fields.as_slice());
+            let hint = describe_type_hint(question.kind, question.choices.as_deref(), list_fields);
+            println!(
+                "Invalid question: {} Expected {} (e.g., {}). Let's try again.",
+                err, hint.expected, hint.example
+            );
             continue;
         }
 
@@ -175,6 +221,7 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
         return Err("at least one question is required".into());
     }
 
+    let validations = prompt_cross_field_validations(&questions)?;
     let input = GenerationInput {
         dir_name,
         summary_md: summary,
@@ -186,6 +233,7 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
             progress_policy: None,
         },
         questions,
+        validations,
     };
 
     let out_root = resolve_output_root(out_dir)?;
@@ -206,6 +254,10 @@ fn run_new(out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
     let bundle = build_bundle(&input)?;
     let bundle_dir = write_bundle(&bundle, &input, &out_root)?;
     println!("Generated QA bundle at {}", bundle_dir.display());
+    if verbose {
+        println!("Detailed bundle state:");
+        dump_bundle_debug(&bundle)?;
+    }
     Ok(())
 }
 
@@ -220,11 +272,37 @@ fn validate_question_input(question: &QuestionInput) -> Result<(), String> {
             return Err("enum questions require at least one comma-separated choice".into());
         }
     }
+    if matches!(question.kind, CliQuestionType::List) {
+        let list = question
+            .list
+            .as_ref()
+            .ok_or("list questions must define list metadata")?;
+        if list.fields.is_empty() {
+            return Err("list questions must define at least one field".into());
+        }
+        if let (Some(min), Some(max)) = (list.min_items, list.max_items)
+            && min > max
+        {
+            return Err("list minimum cannot exceed maximum".into());
+        }
+    }
 
     if let Some(default_value) = &question.default_value {
         ensure_default_matches_type(question.kind, default_value, question.choices.as_deref())?;
     }
 
+    Ok(())
+}
+
+fn dump_bundle_debug(bundle: &GeneratedBundle) -> CliResult<()> {
+    println!("Form specification:");
+    println!("{}", serde_json::to_string_pretty(&bundle.spec)?);
+    println!("Flow specification:");
+    println!("{}", serde_json::to_string_pretty(&bundle.flow)?);
+    println!("Answer schema:");
+    println!("{}", serde_json::to_string_pretty(&bundle.schema)?);
+    println!("Example answers:");
+    println!("{}", serde_json::to_string_pretty(&bundle.examples)?);
     Ok(())
 }
 
@@ -239,6 +317,7 @@ fn ensure_default_matches_type(
         CliQuestionType::Number => parse_number_default(default),
         CliQuestionType::Enum => parse_enum_default(default, choices),
         CliQuestionType::String => Ok(()),
+        CliQuestionType::List => Err("list questions cannot have default values".into()),
     }
 }
 
@@ -283,7 +362,12 @@ fn parse_enum_default(raw: &str, choices: Option<&[String]>) -> Result<(), Strin
     }
 }
 
-fn run_generate(input_path: PathBuf, out_dir: Option<PathBuf>, force: bool) -> CliResult<()> {
+fn run_generate(
+    input_path: PathBuf,
+    out_dir: Option<PathBuf>,
+    force: bool,
+    verbose: bool,
+) -> CliResult<()> {
     let contents = fs::read_to_string(&input_path)?;
     let input: GenerationInput = serde_json::from_str(&contents)?;
     let out_root = resolve_output_root(out_dir)?;
@@ -304,6 +388,10 @@ fn run_generate(input_path: PathBuf, out_dir: Option<PathBuf>, force: bool) -> C
     let bundle = build_bundle(&input)?;
     let bundle_dir = write_bundle(&bundle, &input, &out_root)?;
     println!("Generated QA bundle at {}", bundle_dir.display());
+    if verbose {
+        println!("Detailed bundle state:");
+        dump_bundle_debug(&bundle)?;
+    }
     Ok(())
 }
 
@@ -438,7 +526,8 @@ fn canonicalize_target(path: &Path) -> CliResult<PathBuf> {
 fn run_wizard(
     spec_path: PathBuf,
     answers_path: Option<PathBuf>,
-    debug: bool,
+    verbose: bool,
+    answers_json: bool,
     format: RenderMode,
 ) -> CliResult<()> {
     let spec_str = fs::read_to_string(&spec_path)?;
@@ -447,6 +536,12 @@ fn run_wizard(
         .get("id")
         .and_then(Value::as_str)
         .ok_or("form spec is missing an id")?;
+    let form_id_owned = form_id.to_string();
+    let spec_version = spec_value
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("0.0.0")
+        .to_string();
     let config_json = json!({ "form_spec_json": spec_str }).to_string();
 
     let mut answers = if let Some(path) = answers_path {
@@ -456,13 +551,19 @@ fn run_wizard(
         Value::Object(Map::new())
     };
 
-    let mut presenter = WizardPresenter::new(Verbosity::from_debug(debug));
+    let mut presenter = WizardPresenter::new(Verbosity::from_verbose(verbose), answers_json);
 
     loop {
         let answers_str = answers.to_string();
         let next_value = parse_component_result(&qa_next(form_id, &config_json, &answers_str))?;
         if next_value["status"] == "complete" {
-            presenter.show_completion(&answers);
+            let answer_set = AnswerSet {
+                form_id: form_id_owned.clone(),
+                spec_version: spec_version.clone(),
+                answers: answers.clone(),
+                meta: None,
+            };
+            presenter.show_completion(&answer_set);
             break;
         }
         let question_id = next_value["next_question_id"]
@@ -508,7 +609,13 @@ fn run_wizard(
 
         answers = submit_value["answers"].clone();
         if submit_value["status"] == "complete" {
-            presenter.show_completion(&answers);
+            let answer_set = AnswerSet {
+                form_id: form_id_owned.clone(),
+                spec_version: spec_version.clone(),
+                answers: answers.clone(),
+                meta: None,
+            };
+            presenter.show_completion(&answer_set);
             break;
         }
     }
@@ -598,6 +705,7 @@ fn parse_answer(question: &Value, raw: &str) -> Result<Value, AnswerParseError> 
         "integer" => parse_integer(&prompt_value),
         "number" => parse_number(&prompt_value),
         "enum" => parse_enum(question, &prompt_value),
+        "list" => parse_list(question, &prompt_value),
         _ => Ok(Value::String(prompt_value)),
     }
 }
@@ -670,6 +778,40 @@ fn parse_enum(question: &Value, raw: &str) -> Result<Value, AnswerParseError> {
     }
 }
 
+fn parse_list(question: &Value, raw: &str) -> Result<Value, AnswerParseError> {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(value) if value.is_array() => Ok(value),
+        Ok(_) => Err(AnswerParseError::new(
+            "List answers must be a JSON array.",
+            Some(format!(
+                "expected array of fields [{}]",
+                describe_list_fields(question)
+            )),
+        )),
+        Err(err) => Err(AnswerParseError::new(
+            "Invalid list; provide a JSON array (e.g. [{\"field\": \"value\"}]).",
+            Some(err.to_string()),
+        )),
+    }
+}
+
+fn describe_list_fields(question: &Value) -> String {
+    question
+        .get("list")
+        .and_then(Value::as_object)
+        .and_then(|list| list.get("fields"))
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|field| field.get("id").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|description| !description.is_empty())
+        .unwrap_or_else(|| "<unknown>".into())
+}
+
 fn prompt_line(prompt: &str, default: Option<&str>) -> CliResult<String> {
     if let Some(default_value) = default {
         print!("{} [{}]: ", prompt, default_value);
@@ -710,16 +852,393 @@ fn prompt_non_empty(prompt: &str, default: Option<&str>) -> CliResult<String> {
     }
 }
 
+fn mark_required(prompt: &str) -> String {
+    let trimmed = prompt.trim();
+    if trimmed.to_lowercase().contains("required") {
+        trimmed.to_string()
+    } else {
+        format!("{} (required)", trimmed)
+    }
+}
+
+fn describe_list_size(min_items: Option<usize>, max_items: Option<usize>) -> String {
+    match (min_items, max_items) {
+        (Some(min), Some(max)) => format!("{} to {} items", min, max),
+        (Some(min), None) => format!("at least {} items", min),
+        (None, Some(max)) => format!("up to {} items", max),
+        (None, None) => "unrestricted".into(),
+    }
+}
+
+fn summarize_list_fields(fields: &[QuestionInput]) -> String {
+    fields
+        .iter()
+        .map(|field| format!("{} ({})", field.id, field.kind))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+struct TypeHint {
+    expected: String,
+    example: String,
+}
+
+fn describe_type_hint(
+    kind: CliQuestionType,
+    choices: Option<&[String]>,
+    list_fields: Option<&[QuestionInput]>,
+) -> TypeHint {
+    match kind {
+        CliQuestionType::String => TypeHint {
+            expected: "text".into(),
+            example: "\"Acme Corp\"".into(),
+        },
+        CliQuestionType::Boolean => TypeHint {
+            expected: "boolean (yes/no)".into(),
+            example: "yes".into(),
+        },
+        CliQuestionType::Integer => TypeHint {
+            expected: "integer (whole number)".into(),
+            example: "42".into(),
+        },
+        CliQuestionType::Number => TypeHint {
+            expected: "number (decimals allowed)".into(),
+            example: "3.14".into(),
+        },
+        CliQuestionType::Enum => {
+            let mut expected = "enum choice".to_string();
+            if let Some(values) = choices
+                && !values.is_empty()
+            {
+                expected = format!("enum (one of: {})", values.join(", "));
+            }
+            let example = choices
+                .and_then(|values| values.first())
+                .cloned()
+                .unwrap_or_else(|| "example-choice".into());
+            TypeHint { expected, example }
+        }
+        CliQuestionType::List => {
+            let fields_desc = list_fields
+                .map(summarize_list_fields)
+                .unwrap_or_else(|| "configured fields".into());
+            TypeHint {
+                expected: format!("list (JSON array of objects with fields: {})", fields_desc),
+                example: "[{\"field\": \"value\"}]".into(),
+            }
+        }
+    }
+}
+
+fn prompt_visibility_condition(questions: &[QuestionInput]) -> CliResult<Option<Expr>> {
+    if questions.is_empty() || !prompt_bool("Add visibility condition?", false)? {
+        return Ok(None);
+    }
+    println!("Existing questions: {}", existing_question_ids(questions));
+    let expr = prompt_boolean_expression(questions, 0)?;
+    Ok(Some(expr))
+}
+
+fn prompt_boolean_expression(questions: &[QuestionInput], depth: usize) -> CliResult<Expr> {
+    const MAX_DEPTH: usize = 4;
+    let mut prompt = String::from("Expression type (comparison/is_set");
+    if depth < MAX_DEPTH {
+        prompt.push_str("/and/or/not");
+    }
+    prompt.push(')');
+    let choice = prompt_line(&prompt, Some("comparison"))?;
+    match choice.trim().to_lowercase().as_str() {
+        "is_set" => prompt_is_set_expression(questions),
+        "and" if depth < MAX_DEPTH => {
+            let left = prompt_boolean_expression(questions, depth + 1)?;
+            let right = prompt_boolean_expression(questions, depth + 1)?;
+            Ok(Expr::And {
+                expressions: vec![left, right],
+            })
+        }
+        "or" if depth < MAX_DEPTH => {
+            let left = prompt_boolean_expression(questions, depth + 1)?;
+            let right = prompt_boolean_expression(questions, depth + 1)?;
+            Ok(Expr::Or {
+                expressions: vec![left, right],
+            })
+        }
+        "not" if depth < MAX_DEPTH => {
+            let inner = prompt_boolean_expression(questions, depth + 1)?;
+            Ok(Expr::Not {
+                expression: Box::new(inner),
+            })
+        }
+        _ => {
+            println!("Building comparison expression...");
+            prompt_comparison_expression(questions)
+        }
+    }
+}
+
+fn prompt_comparison_expression(questions: &[QuestionInput]) -> CliResult<Expr> {
+    println!("Existing questions: {}", existing_question_ids(questions));
+    let operator = prompt_line("Operator (eq/ne/lt/lte/gt/gte)", Some("eq"))?;
+    let normalized = operator.trim().to_lowercase();
+    let left_id = prompt_non_empty("Question ID to compare", None)?;
+    let left_expr = Expr::Answer { path: left_id };
+    let operand = prompt_line("Right operand type (literal/question)", Some("literal"))?;
+    let right_expr = match operand.trim().to_lowercase().as_str() {
+        "question" | "answer" => {
+            let right_id = prompt_non_empty("Question ID for right operand", None)?;
+            Expr::Answer { path: right_id }
+        }
+        _ => {
+            let value = prompt_non_empty("Value to compare against", None)?;
+            Expr::Literal {
+                value: parse_expression_literal(&value),
+            }
+        }
+    };
+    Ok(build_binary_expression(&normalized, left_expr, right_expr))
+}
+
+fn prompt_is_set_expression(questions: &[QuestionInput]) -> CliResult<Expr> {
+    println!("Existing questions: {}", existing_question_ids(questions));
+    let target = prompt_non_empty("Question ID to check for presence", None)?;
+    Ok(Expr::IsSet { path: target })
+}
+
+fn prompt_cross_field_validations(
+    questions: &[QuestionInput],
+) -> CliResult<Vec<CrossFieldValidation>> {
+    let mut validations = Vec::new();
+    while prompt_bool("Add cross-field validation?", false)? {
+        let id = prompt_optional("Validation ID (optional)")?;
+        let message = prompt_non_empty("Validation message", None)?;
+        let fields = prompt_validation_fields(questions)?;
+        let condition = prompt_boolean_expression(questions, 0)?;
+        validations.push(CrossFieldValidation {
+            id,
+            message,
+            fields,
+            condition,
+            code: None,
+        });
+    }
+    Ok(validations)
+}
+
+fn prompt_validation_fields(questions: &[QuestionInput]) -> CliResult<Vec<String>> {
+    loop {
+        println!("Available questions: {}", existing_question_ids(questions));
+        let raw = prompt_line("Fields to validate (comma separated question IDs)", None)?;
+        let mut fields = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(String::from)
+            .collect::<Vec<_>>();
+        fields.dedup();
+        if fields.is_empty() {
+            println!("Provide at least one field.");
+            continue;
+        }
+        let unknown = fields
+            .iter()
+            .filter(|field| !question_exists(questions, field))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            println!("Unknown fields: {}.", unknown.join(", "));
+            continue;
+        }
+        return Ok(fields);
+    }
+}
+
+fn question_exists(questions: &[QuestionInput], candidate: &str) -> bool {
+    questions.iter().any(|question| question.id == candidate)
+}
+
+fn prompt_computed_field(
+    kind: CliQuestionType,
+    existing: &[QuestionInput],
+) -> CliResult<(Option<Expr>, bool)> {
+    if matches!(kind, CliQuestionType::List) || !prompt_bool("Compute this question value?", false)?
+    {
+        return Ok((None, false));
+    }
+    println!("Existing questions: {}", existing_question_ids(existing));
+    loop {
+        let source = prompt_line("Computed source (answer/literal)", Some("answer"))?;
+        let normalized = source.trim().to_lowercase();
+        match normalized.as_str() {
+            "answer" => {
+                let question = prompt_non_empty("Source question ID", None)?;
+                let overrides = prompt_bool("Allow overriding computed value?", false)?;
+                return Ok((Some(Expr::Answer { path: question }), overrides));
+            }
+            "literal" => {
+                let literal = prompt_non_empty("Literal value", None)?;
+                let overrides = prompt_bool("Allow overriding computed value?", false)?;
+                return Ok((
+                    Some(Expr::Literal {
+                        value: parse_expression_literal(&literal),
+                    }),
+                    overrides,
+                ));
+            }
+            _ => {
+                println!("Unknown source '{}'. Choose answer or literal.", normalized);
+            }
+        }
+    }
+}
+
+fn prompt_constraint(kind: CliQuestionType) -> CliResult<Option<Constraint>> {
+    let mut constraint = Constraint {
+        pattern: None,
+        min: None,
+        max: None,
+        min_len: None,
+        max_len: None,
+    };
+    let mut changed = false;
+    if matches!(kind, CliQuestionType::Integer | CliQuestionType::Number) {
+        if let Some(min) = prompt_optional_f64("Minimum numeric value (blank for none)")? {
+            constraint.min = Some(min);
+            changed = true;
+        }
+        if let Some(max) = prompt_optional_f64("Maximum numeric value (blank for none)")? {
+            constraint.max = Some(max);
+            changed = true;
+        }
+    }
+    if matches!(kind, CliQuestionType::String | CliQuestionType::Enum) {
+        if let Some(min_len) = prompt_optional_usize("Minimum length (blank for none)")? {
+            constraint.min_len = Some(min_len);
+            changed = true;
+        }
+        if let Some(max_len) = prompt_optional_usize("Maximum length (blank for none)")? {
+            constraint.max_len = Some(max_len);
+            changed = true;
+        }
+        if let Some(pattern) = prompt_optional("Regex pattern (blank for none)")?
+            && !pattern.trim().is_empty()
+        {
+            constraint.pattern = Some(pattern);
+            changed = true;
+        }
+    }
+    if changed {
+        Ok(Some(constraint))
+    } else {
+        Ok(None)
+    }
+}
+
+fn prompt_optional_f64(prompt: &str) -> CliResult<Option<f64>> {
+    loop {
+        let raw = prompt_line(prompt, None)?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        match trimmed.parse::<f64>() {
+            Ok(value) => return Ok(Some(value)),
+            Err(_) => {
+                println!("Enter a number or leave blank.");
+            }
+        }
+    }
+}
+
+fn parse_expression_literal(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("true") {
+        return Value::Bool(true);
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return Value::Bool(false);
+    }
+    if let Ok(int_val) = trimmed.parse::<i64>() {
+        return Value::Number(Number::from(int_val));
+    }
+    if let Ok(float_val) = trimmed.parse::<f64>()
+        && let Some(number) = Number::from_f64(float_val)
+    {
+        return Value::Number(number);
+    }
+    if let Ok(json_val) = serde_json::from_str::<Value>(trimmed) {
+        return json_val;
+    }
+    Value::String(trimmed.to_string())
+}
+
+fn existing_question_ids(questions: &[QuestionInput]) -> String {
+    if questions.is_empty() {
+        "<none>".into()
+    } else {
+        questions
+            .iter()
+            .map(|question| question.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+fn build_binary_expression(operator: &str, left: Expr, right: Expr) -> Expr {
+    match operator {
+        "eq" => Expr::Eq {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        "ne" => Expr::Ne {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        "lt" => Expr::Lt {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        "lte" => Expr::Lte {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        "gt" => Expr::Gt {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        "gte" => Expr::Gte {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+        _ => Expr::Eq {
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+    }
+}
+
+fn render_list_example(fields: &[QuestionInput]) -> String {
+    let entries = fields
+        .iter()
+        .map(|field| {
+            let hint = describe_type_hint(field.kind, field.choices.as_deref(), None);
+            format!("\"{}\": {}", field.id, hint.example)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{{ {} }}]", entries)
+}
+
 fn prompt_bool(prompt: &str, default: bool) -> CliResult<bool> {
+    let prompt_text = format!("{} (y/n)", prompt.trim());
     let default_hint = if default { "Y" } else { "N" };
     loop {
-        let line = prompt_line(prompt, Some(default_hint))?;
+        let line = prompt_line(&prompt_text, Some(default_hint))?;
         match line.trim().to_lowercase().as_str() {
             "" => return Ok(default),
             "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
             other => {
-                println!("Invalid answer '{}'. Use 'y' or 'n'.", other);
+                println!("Invalid answer '{}'. Expected yes or no.", other);
             }
         }
     }
@@ -728,7 +1247,7 @@ fn prompt_bool(prompt: &str, default: bool) -> CliResult<bool> {
 fn prompt_question_type() -> CliResult<CliQuestionType> {
     loop {
         let value = prompt_line(
-            "Question type (string|boolean|integer|number|enum)",
+            "Question type (string|boolean|integer|number|enum|list)",
             Some("string"),
         )?;
         match CliQuestionType::from_str(&value) {
@@ -753,6 +1272,136 @@ fn prompt_enum_choices() -> CliResult<Vec<String>> {
         }
         return Ok(normalized);
     }
+}
+
+fn prompt_optional_usize(prompt: &str) -> CliResult<Option<usize>> {
+    loop {
+        let raw = prompt_line(prompt, None)?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        match trimmed.parse::<usize>() {
+            Ok(value) => return Ok(Some(value)),
+            Err(_) => {
+                println!("Please enter a whole number or leave blank.");
+            }
+        }
+    }
+}
+
+fn prompt_list_input() -> CliResult<ListInput> {
+    loop {
+        let min_items = prompt_optional_usize("Minimum items (blank for no limit)")?;
+        let max_items = prompt_optional_usize("Maximum items (blank for no limit)")?;
+        if let (Some(min), Some(max)) = (min_items, max_items)
+            && min > max
+        {
+            println!("Minimum items cannot exceed maximum items.");
+            continue;
+        }
+
+        println!("List size: {}.", describe_list_size(min_items, max_items));
+
+        let fields = prompt_list_fields()?;
+        if fields.is_empty() {
+            println!("At least one field must be defined for a list.");
+            continue;
+        }
+
+        println!(
+            "Defined {} list field(s): {}",
+            fields.len(),
+            summarize_list_fields(&fields)
+        );
+        println!("Example list entry: {}", render_list_example(&fields));
+
+        return Ok(ListInput {
+            min_items,
+            max_items,
+            fields,
+        });
+    }
+}
+
+fn prompt_list_fields() -> CliResult<Vec<QuestionInput>> {
+    let mut fields: Vec<QuestionInput> = Vec::new();
+    loop {
+        let field_id = prompt_optional("Field ID (blank to finish)")?;
+        let field_id = match field_id.filter(|value| !value.trim().is_empty()) {
+            Some(id) => {
+                if fields.iter().any(|field| field.id == id) {
+                    println!("Field ID '{}' already used; choose another.", id);
+                    continue;
+                }
+                id
+            }
+            None => break,
+        };
+
+        let field_title = prompt_non_empty(&mark_required("Field title"), Some(&field_id))?;
+        let field_kind = loop {
+            let kind = prompt_question_type()?;
+            if matches!(kind, CliQuestionType::List) {
+                println!("Nested list fields are not allowed.");
+                continue;
+            }
+            break kind;
+        };
+        let required = prompt_bool("Field required?", true)?;
+        let field_description = prompt_optional("Field description (optional)")?;
+        let field_choices = if matches!(field_kind, CliQuestionType::Enum) {
+            Some(prompt_enum_choices()?)
+        } else {
+            None
+        };
+        let default_prompt = default_prompt_for(field_kind, field_choices.as_deref());
+        let field_default = loop {
+            let candidate = prompt_optional(&default_prompt)?;
+            if let Some(value) = &candidate
+                && let Err(err) =
+                    ensure_default_matches_type(field_kind, value, field_choices.as_deref())
+            {
+                println!("Invalid default: {} Please try again.", err);
+                continue;
+            }
+            break candidate;
+        };
+        let field_secret = prompt_bool("Field secret value?", false)?;
+        let field_hint = describe_type_hint(field_kind, field_choices.as_deref(), None);
+        let field_input = QuestionInput {
+            id: field_id.clone(),
+            kind: field_kind,
+            title: field_title,
+            description: field_description,
+            required,
+            default_value: field_default,
+            choices: field_choices,
+            secret: field_secret,
+            list: None,
+            visible_if: None,
+            constraint: None,
+            computed: None,
+            computed_overridable: false,
+        };
+        if let Err(err) = validate_question_input(&field_input) {
+            println!("Invalid field: {}. Let's try again.", err);
+            continue;
+        }
+        fields.push(field_input);
+        println!(
+            "Added list field '{}': {} (total {}).",
+            field_id,
+            field_kind,
+            fields.len()
+        );
+        println!(
+            "Field hint: expected {} (example {}).",
+            field_hint.expected, field_hint.example
+        );
+    }
+
+    Ok(fields)
 }
 
 fn default_prompt_for(kind: CliQuestionType, choices: Option<&[String]>) -> String {
@@ -924,6 +1573,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_answer_list_accepts_array() {
+        let question = json!({
+            "type": "list",
+            "required": true,
+            "list": {
+                "fields": [
+                    { "id": "name" },
+                    { "id": "value" }
+                ]
+            }
+        });
+        let value = parse_answer(&question, r#"[{"name": "alpha", "value": "v1"}]"#).unwrap();
+        assert!(value.is_array());
+    }
+
+    #[test]
+    fn parse_answer_list_rejects_non_array() {
+        let question = json!({
+            "type": "list",
+            "required": true,
+            "list": {
+                "fields": [
+                    { "id": "name" }
+                ]
+            }
+        });
+        assert!(parse_answer(&question, r#"{"name": "alpha"}"#).is_err());
+    }
+
+    #[test]
     fn parse_answer_respects_defaults() {
         let question = json!({
             "type": "string",
@@ -1006,6 +1685,11 @@ mod tests {
             default_value: Some("we".into()),
             choices: None,
             secret: false,
+            list: None,
+            visible_if: None,
+            constraint: None,
+            computed: None,
+            computed_overridable: false,
         };
         assert!(validate_question_input(&question).is_err());
     }

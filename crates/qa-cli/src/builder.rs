@@ -9,10 +9,12 @@ use std::{
 use qa_spec::{
     answers_schema::generate as answers_schema,
     examples::generate as example_answers,
+    expr::Expr,
     spec::{
         flow::{QAFlowSpec, QuestionStep, StepSpec},
         form::{FormPresentation, FormSpec, ProgressPolicy},
-        question::{QuestionPolicy, QuestionSpec, QuestionType},
+        question::{Constraint, ListSpec, QuestionPolicy, QuestionSpec, QuestionType},
+        validation::CrossFieldValidation,
     },
     visibility::{VisibilityMode, resolve_visibility},
 };
@@ -25,6 +27,8 @@ pub struct GenerationInput {
     pub form: FormInput,
     #[serde(default)]
     pub questions: Vec<QuestionInput>,
+    #[serde(default)]
+    pub validations: Vec<CrossFieldValidation>,
 }
 
 /// Metadata describing the form.
@@ -81,6 +85,16 @@ pub struct QuestionInput {
     pub choices: Option<Vec<String>>,
     #[serde(default)]
     pub secret: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ListInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_if: Option<Expr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint: Option<Constraint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computed: Option<Expr>,
+    #[serde(default)]
+    pub computed_overridable: bool,
 }
 
 fn default_required() -> bool {
@@ -97,6 +111,7 @@ pub enum CliQuestionType {
     Integer,
     Number,
     Enum,
+    List,
 }
 
 impl fmt::Display for CliQuestionType {
@@ -107,8 +122,20 @@ impl fmt::Display for CliQuestionType {
             CliQuestionType::Integer => write!(f, "integer"),
             CliQuestionType::Number => write!(f, "number"),
             CliQuestionType::Enum => write!(f, "enum"),
+            CliQuestionType::List => write!(f, "list"),
         }
     }
+}
+
+/// Metadata required to describe a repeatable list question.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<QuestionInput>,
 }
 
 impl std::str::FromStr for CliQuestionType {
@@ -121,6 +148,7 @@ impl std::str::FromStr for CliQuestionType {
             "integer" | "int" => Ok(CliQuestionType::Integer),
             "number" | "float" => Ok(CliQuestionType::Number),
             "enum" | "choice" => Ok(CliQuestionType::Enum),
+            "list" => Ok(CliQuestionType::List),
             _ => Err(format!("unknown question type '{}'", value)),
         }
     }
@@ -159,6 +187,7 @@ pub fn build_bundle(input: &GenerationInput) -> Result<GeneratedBundle, String> 
         progress_policy,
         secrets_policy: None,
         store: Vec::new(),
+        validations: input.validations.clone(),
         questions,
     };
 
@@ -208,6 +237,78 @@ fn validate_input(input: &GenerationInput) -> Result<(), String> {
                 ));
             }
         }
+
+        if matches!(question.kind, CliQuestionType::List) {
+            let list = question.list.as_ref().ok_or_else(|| {
+                format!("list question '{}' must include list metadata", question.id)
+            })?;
+            if list.fields.is_empty() {
+                return Err(format!(
+                    "list question '{}' must define at least one field",
+                    question.id
+                ));
+            }
+            if let (Some(min), Some(max)) = (list.min_items, list.max_items)
+                && min > max
+            {
+                return Err(format!(
+                    "list question '{}' min_items cannot exceed max_items",
+                    question.id
+                ));
+            }
+            let mut seen_fields = HashSet::new();
+            for field in &list.fields {
+                if field.id.trim().is_empty() {
+                    return Err("list field id cannot be empty".into());
+                }
+                if !seen_fields.insert(field.id.clone()) {
+                    return Err(format!(
+                        "duplicate field id '{}' in list question '{}'",
+                        field.id, question.id
+                    ));
+                }
+                if matches!(field.kind, CliQuestionType::List) {
+                    return Err("list fields cannot be lists".into());
+                }
+            }
+        }
+
+        if let Some(constraint) = &question.constraint {
+            if let (Some(min), Some(max)) = (constraint.min, constraint.max)
+                && min > max
+            {
+                return Err(format!(
+                    "constraint min '{}' cannot exceed max '{}'",
+                    min, max
+                ));
+            }
+            if let (Some(min_len), Some(max_len)) = (constraint.min_len, constraint.max_len)
+                && min_len > max_len
+            {
+                return Err(format!(
+                    "constraint min_len '{}' cannot exceed max_len '{}'",
+                    min_len, max_len
+                ));
+            }
+        }
+    }
+
+    for validation in &input.validations {
+        if validation.message.trim().is_empty() {
+            return Err("validation message must be provided".into());
+        }
+        if validation.fields.is_empty() {
+            return Err("validation must list at least one field".into());
+        }
+        for field in &validation.fields {
+            if !input.questions.iter().any(|question| question.id == *field) {
+                return Err(format!(
+                    "validation '{}' references unknown field '{}'",
+                    validation.id.as_deref().unwrap_or("<unnamed>"),
+                    field
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -227,6 +328,11 @@ fn to_question_spec(question: &QuestionInput) -> QuestionSpec {
         CliQuestionType::Enum => question.choices.clone(),
         _ => None,
     };
+    let list = question.list.as_ref().map(|list| ListSpec {
+        min_items: list.min_items,
+        max_items: list.max_items,
+        fields: list.fields.iter().map(to_question_spec).collect::<Vec<_>>(),
+    });
 
     QuestionSpec {
         id: question.id.clone(),
@@ -237,9 +343,12 @@ fn to_question_spec(question: &QuestionInput) -> QuestionSpec {
         choices,
         default_value: question.default_value.clone(),
         secret: question.secret,
-        visible_if: None,
-        constraint: None,
+        visible_if: question.visible_if.clone(),
+        constraint: question.constraint.clone(),
+        list,
         policy: QuestionPolicy::default(),
+        computed: question.computed.clone(),
+        computed_overridable: question.computed_overridable,
     }
 }
 
@@ -251,6 +360,7 @@ impl CliQuestionType {
             CliQuestionType::Integer => QuestionType::Integer,
             CliQuestionType::Number => QuestionType::Number,
             CliQuestionType::Enum => QuestionType::Enum,
+            CliQuestionType::List => QuestionType::List,
         }
     }
 }

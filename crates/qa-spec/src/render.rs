@@ -2,8 +2,12 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     answers_schema,
+    computed::apply_computed_answers,
     progress::{ProgressContext, next_question},
-    spec::{form::FormSpec, question::QuestionType},
+    spec::{
+        form::FormSpec,
+        question::{ListSpec, QuestionType},
+    },
     visibility::{VisibilityMode, resolve_visibility},
 };
 
@@ -49,6 +53,7 @@ pub struct RenderQuestion {
     pub visible: bool,
     pub current_value: Option<Value>,
     pub choices: Option<Vec<String>>,
+    pub list: Option<ListSpec>,
 }
 
 /// Collected payload used by both text and JSON renderers.
@@ -67,8 +72,9 @@ pub struct RenderPayload {
 
 /// Build the renderer payload from the specification, context, and answers.
 pub fn build_render_payload(spec: &FormSpec, ctx: &Value, answers: &Value) -> RenderPayload {
-    let visibility = resolve_visibility(spec, answers, VisibilityMode::Visible);
-    let progress_ctx = ProgressContext::new(answers.clone(), ctx);
+    let computed_answers = apply_computed_answers(spec, answers);
+    let visibility = resolve_visibility(spec, &computed_answers, VisibilityMode::Visible);
+    let progress_ctx = ProgressContext::new(computed_answers.clone(), ctx);
     let next_question_id = next_question(spec, &progress_ctx, &visibility);
 
     let answered = progress_ctx.answered_count(spec, &visibility);
@@ -86,8 +92,9 @@ pub fn build_render_payload(spec: &FormSpec, ctx: &Value, answers: &Value) -> Re
             default: question.default_value.clone(),
             secret: question.secret,
             visible: visibility.get(&question.id).copied().unwrap_or(true),
-            current_value: answers.get(&question.id).cloned(),
+            current_value: computed_answers.get(&question.id).cloned(),
             choices: question.choices.clone(),
+            list: question.list.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -159,6 +166,11 @@ pub fn render_json_ui(payload: &RenderPayload) -> Value {
             }
             map.insert("visible".into(), Value::Bool(question.visible));
             map.insert("secret".into(), Value::Bool(question.secret));
+            if let Some(list) = &question.list
+                && let Ok(list_value) = serde_json::to_value(list)
+            {
+                map.insert("list".into(), list_value);
+            }
             Value::Object(map)
         })
         .collect::<Vec<_>>();
@@ -377,6 +389,25 @@ fn question_input(question: &RenderQuestion) -> Value {
             }
             Value::Object(map)
         }
+        QuestionType::List => {
+            let mut map = Map::new();
+            map.insert("type".into(), Value::String("TextBlock".into()));
+            map.insert(
+                "text".into(),
+                Value::String(format!(
+                    "List group '{}' ({} entries)",
+                    question.title,
+                    question
+                        .current_value
+                        .as_ref()
+                        .and_then(Value::as_array)
+                        .map(|entries| entries.len())
+                        .unwrap_or_default()
+                )),
+            );
+            map.insert("wrap".into(), Value::Bool(true));
+            Value::Object(map)
+        }
     }
 }
 
@@ -387,6 +418,7 @@ fn question_type_label(kind: QuestionType) -> &'static str {
         QuestionType::Integer => "integer",
         QuestionType::Number => "number",
         QuestionType::Enum => "enum",
+        QuestionType::List => "list",
     }
 }
 

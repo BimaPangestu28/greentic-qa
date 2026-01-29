@@ -1,3 +1,6 @@
+use std::fmt::Write;
+
+use qa_spec::AnswerSet;
 use serde_json::Value;
 
 /// Controls which bits of state the wizard prints.
@@ -5,21 +8,21 @@ use serde_json::Value;
 pub enum Verbosity {
     /// Clean output: question prompts only.
     Clean,
-    /// Debug output: status, visible questions, error details, help text.
-    Debug,
+    /// Verbose output: status, visible questions, error details, help text.
+    Verbose,
 }
 
 impl Verbosity {
-    pub fn from_debug(debug: bool) -> Self {
-        if debug {
-            Verbosity::Debug
+    pub fn from_verbose(verbose: bool) -> Self {
+        if verbose {
+            Verbosity::Verbose
         } else {
             Verbosity::Clean
         }
     }
 
-    pub fn is_debug(&self) -> bool {
-        matches!(self, Verbosity::Debug)
+    pub fn is_verbose(&self) -> bool {
+        matches!(self, Verbosity::Verbose)
     }
 }
 
@@ -27,13 +30,15 @@ impl Verbosity {
 pub struct WizardPresenter {
     verbosity: Verbosity,
     header_printed: bool,
+    show_answers_json: bool,
 }
 
 impl WizardPresenter {
-    pub fn new(verbosity: Verbosity) -> Self {
+    pub fn new(verbosity: Verbosity, show_answers_json: bool) -> Self {
         Self {
             verbosity,
             header_printed: false,
+            show_answers_json,
         }
     }
 
@@ -42,7 +47,7 @@ impl WizardPresenter {
             return;
         }
         println!("Form: {}", payload.form_title);
-        if self.verbosity.is_debug()
+        if self.verbosity.is_verbose()
             && let Some(help) = &payload.help
         {
             println!("Help: {}", help);
@@ -51,7 +56,7 @@ impl WizardPresenter {
     }
 
     pub fn show_status(&self, payload: &WizardPayload) {
-        if self.verbosity.is_debug() {
+        if self.verbosity.is_verbose() {
             println!(
                 "Status: {} ({}/{})",
                 payload.status.as_str(),
@@ -82,7 +87,7 @@ impl WizardPresenter {
             format!("{} {}", prompt.index, prompt.title)
         };
         if prompt.required {
-            line.push('*');
+            line.push_str(" *");
         }
         if let Some(hint) = &prompt.hint {
             line.push(' ');
@@ -92,25 +97,38 @@ impl WizardPresenter {
         if let Some(description) = &prompt.description {
             println!("{}", description);
         }
-        if self.verbosity.is_debug() && !prompt.choices.is_empty() {
+        if !prompt.list_fields.is_empty() {
+            println!("List fields: {}", prompt.list_fields.join(", "));
+        }
+        if self.verbosity.is_verbose() && !prompt.choices.is_empty() {
             println!("Choices: {}", prompt.choices.join(", "));
         }
     }
 
     pub fn show_parse_error(&self, error: &AnswerParseError) {
         eprintln!("Invalid answer: {}", error.user_message);
-        if self.verbosity.is_debug()
-            && let Some(debug) = &error.debug_message
-        {
-            eprintln!("  Debug: {}", debug);
+        if let Some(debug) = &error.debug_message {
+            eprintln!("  Expected: {}", debug);
         }
     }
 
-    pub fn show_completion(&self, answers: &Value) {
+    pub fn show_completion(&self, answer_set: &AnswerSet) {
         println!("Done ✅");
-        match serde_json::to_string_pretty(answers) {
-            Ok(pretty) => println!("{}", pretty),
-            Err(_) => println!("{}", answers),
+        match answer_set.to_cbor() {
+            Ok(bytes) => {
+                println!("Answers (CBOR hex): {}", encode_hex(&bytes));
+            }
+            Err(err) => {
+                eprintln!("Failed to serialize answers to CBOR: {}", err);
+            }
+        }
+        if self.show_answers_json {
+            match answer_set.to_json_pretty() {
+                Ok(pretty) => println!("{}", pretty),
+                Err(err) => {
+                    eprintln!("Failed to serialize answers to JSON: {}", err);
+                }
+            }
         }
     }
 }
@@ -218,6 +236,7 @@ pub struct WizardQuestion {
     pub required: bool,
     pub choices: Vec<String>,
     pub visible: bool,
+    pub list_fields: Vec<String>,
 }
 
 impl WizardQuestion {
@@ -260,6 +279,19 @@ impl WizardQuestion {
             .get("visible")
             .and_then(Value::as_bool)
             .unwrap_or(true);
+        let list_fields = value
+            .get("list")
+            .and_then(Value::as_object)
+            .and_then(|list| list.get("fields"))
+            .and_then(Value::as_array)
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(|field| field.get("id").and_then(Value::as_str))
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         Ok(Self {
             id,
             title,
@@ -268,6 +300,7 @@ impl WizardQuestion {
             required,
             choices,
             visible,
+            list_fields,
         })
     }
 }
@@ -281,6 +314,7 @@ pub struct PromptContext {
     pub required: bool,
     pub hint: Option<String>,
     pub choices: Vec<String>,
+    pub list_fields: Vec<String>,
 }
 
 impl PromptContext {
@@ -296,6 +330,7 @@ impl PromptContext {
             required: question.required,
             hint,
             choices: question.choices.clone(),
+            list_fields: question.list_fields.clone(),
         }
     }
 }
@@ -308,6 +343,7 @@ pub enum QuestionKind {
     Integer,
     Number,
     Enum,
+    List,
     Unknown,
 }
 
@@ -319,16 +355,18 @@ impl QuestionKind {
             "integer" => QuestionKind::Integer,
             "number" => QuestionKind::Number,
             "enum" => QuestionKind::Enum,
+            "list" => QuestionKind::List,
             _ => QuestionKind::Unknown,
         }
     }
 
     fn hint(&self, choices: &[String]) -> Option<String> {
         match self {
-            QuestionKind::Boolean => Some("(yes/no)".to_string()),
+            QuestionKind::Boolean => Some("(yes/no, y/n, true/false)".to_string()),
             QuestionKind::Integer => Some("(integer)".to_string()),
             QuestionKind::Number => Some("(number)".to_string()),
             QuestionKind::Enum if !choices.is_empty() => Some(format!("({})", choices.join("/"))),
+            QuestionKind::List => Some("(repeatable list)".to_string()),
             _ => None,
         }
     }
@@ -348,4 +386,12 @@ impl AnswerParseError {
             debug_message,
         }
     }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut encoded, "{:02x}", byte).expect("writing to string cannot fail");
+    }
+    encoded
 }

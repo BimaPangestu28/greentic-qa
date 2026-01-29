@@ -50,8 +50,12 @@ fn expr_knows_visibility() {
         }
     });
     let expr = Expr::Eq {
-        left: "/answers/flag".into(),
-        right: "/answers/flag".into(),
+        left: Box::new(Expr::Var {
+            path: "/answers/flag".into(),
+        }),
+        right: Box::new(Expr::Var {
+            path: "/answers/flag".into(),
+        }),
     };
-    assert_eq!(expr.evaluate(&ctx), Some(true));
+    assert_eq!(expr.evaluate_bool(&ctx), Some(true));
 }
