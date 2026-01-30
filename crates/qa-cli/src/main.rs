@@ -132,6 +132,7 @@ fn run_new(out_dir: Option<PathBuf>, force: bool, verbose: bool) -> CliResult<()
     let description = prompt_optional("Description (optional)")?;
     let summary = prompt_optional("Summary for README (optional)")?;
     let dir_name = prompt_non_empty(&mark_required("Output directory name"), Some(&form_id))?;
+    let out_root = resolve_output_root(out_dir)?;
 
     let mut questions = Vec::new();
     loop {
@@ -178,15 +179,28 @@ fn run_new(out_dir: Option<PathBuf>, force: bool, verbose: bool) -> CliResult<()
             }
             break candidate;
         };
-        let secret = prompt_bool("Secret value?", false)?;
+        let advanced_features = prompt_bool("Advanced features?", false)?;
+        let secret = if advanced_features {
+            prompt_bool("Secret value?", false)?
+        } else {
+            false
+        };
         let list = if matches!(kind, CliQuestionType::List) {
             Some(prompt_list_input()?)
         } else {
             None
         };
-        let visible_if = prompt_visibility_condition(&questions)?;
+        let visible_if = if advanced_features {
+            prompt_visibility_condition(&questions)?
+        } else {
+            None
+        };
         let constraint = prompt_constraint(kind)?;
-        let (computed, computed_overridable) = prompt_computed_field(kind, &questions)?;
+        let (computed, computed_overridable) = if advanced_features {
+            prompt_computed_field(kind, &questions)?
+        } else {
+            (None, false)
+        };
 
         let question = QuestionInput {
             id: question_id,
@@ -236,7 +250,6 @@ fn run_new(out_dir: Option<PathBuf>, force: bool, verbose: bool) -> CliResult<()
         validations,
     };
 
-    let out_root = resolve_output_root(out_dir)?;
     let bundle_dir = out_root.join(&input.dir_name);
     ensure_allowed_root(&bundle_dir)?;
     if bundle_dir.exists() {
@@ -457,7 +470,7 @@ fn resolve_output_root(out: Option<PathBuf>) -> CliResult<PathBuf> {
 fn ensure_allowed_root(target: &Path) -> CliResult<()> {
     let target = canonicalize_target(target)?;
     let roots = allowed_roots()?;
-    if roots.iter().any(|root| target.starts_with(root)) {
+    if roots.iter().any(|root| target.starts_with(root)) || path_is_writable(&target) {
         Ok(())
     } else {
         Err(format!(
@@ -502,6 +515,20 @@ fn allowed_roots() -> CliResult<Vec<PathBuf>> {
     }
 
     Ok(canonical_roots)
+}
+
+fn path_is_writable(target: &Path) -> bool {
+    let mut candidate = Some(target);
+    while let Some(path) = candidate {
+        if path.exists() {
+            if let Ok(metadata) = fs::metadata(path) {
+                return !metadata.permissions().readonly();
+            }
+            return false;
+        }
+        candidate = path.parent();
+    }
+    false
 }
 
 fn canonicalize_target(path: &Path) -> CliResult<PathBuf> {
@@ -1536,9 +1563,33 @@ fn print_render_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use std::fs;
+    use assert_cmd::Command;
+    use serde_json::{Value, json};
+    use std::{env, ffi::OsString, fs, path::Path};
     use tempfile::TempDir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let original = env::var_os(key);
+            env::set_var(key, value);
+            EnvVarGuard { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(ref value) = self.original {
+                env::set_var(self.key, value);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
+    }
 
     use crate::builder::{GenerationInput, QuestionInput, build_bundle, write_bundle};
     use serde_json::from_str;
@@ -1692,5 +1743,62 @@ mod tests {
             computed_overridable: false,
         };
         assert!(validate_question_input(&question).is_err());
+    }
+
+    #[test]
+    fn ensure_allowed_root_accepts_writable_paths_outside_allowed_roots() {
+        let allowed_root = TempDir::new().expect("temp dir");
+        let other_root = TempDir::new().expect("temp dir");
+        let _guard = EnvVarGuard::set("QA_WIZARD_ALLOWED_ROOTS", allowed_root.path());
+        assert!(ensure_allowed_root(other_root.path()).is_ok());
+    }
+
+    #[test]
+    fn new_command_skips_advanced_prompts_when_not_selected()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = assert_fs::TempDir::new().unwrap();
+        let output_root = workspace.path().join("wizard-out");
+        let answers = [
+            "form-id",
+            "Form Title",
+            "",
+            "",
+            "",
+            "",
+            "question-id",
+            "Question Title",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ];
+        let stdin = format!("{}\n", answers.join("\n"));
+
+        let mut cmd = Command::cargo_bin("greentic-qa")?;
+        cmd.arg("new")
+            .arg("--out")
+            .arg(&output_root)
+            .write_stdin(stdin)
+            .assert()
+            .success();
+
+        let spec_path = output_root
+            .join("form-id")
+            .join("forms")
+            .join("form-id.form.json");
+        let spec_json = fs::read_to_string(&spec_path)?;
+        let spec: Value = serde_json::from_str(&spec_json)?;
+        let question = &spec["questions"][0];
+        assert_eq!(question["secret"].as_bool(), Some(false));
+        assert!(question.get("visible_if").is_none());
+        assert!(question.get("computed").is_none());
+
+        Ok(())
     }
 }
