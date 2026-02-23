@@ -8,10 +8,10 @@ members = [
 
 [workspace.package]
 name = "greentic-qa"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 license = "MIT"
-rust-version = "1.90"
+rust-version = "1.91"
 repository = "https://github.com/greentic-ai/greentic-qa"
 homepage = "https://github.com/greentic-ai/greentic-qa"
 description = "Greentic QA tooling (component-qa, greentic-qa, qa-spec) for adaptive wizard flows."
@@ -29,3 +29,5 @@ regex = "1"
 globset = "0.4"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
+assert_cmd = "2"
+assert_fs = "1"

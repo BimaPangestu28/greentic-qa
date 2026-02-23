@@ -1576,7 +1576,8 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: &Path) -> Self {
             let original = env::var_os(key);
-            env::set_var(key, value);
+            // Tests mutate process env in a scoped guard and restore it in Drop.
+            unsafe { env::set_var(key, value) };
             EnvVarGuard { key, original }
         }
     }
@@ -1584,11 +1585,28 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(ref value) = self.original {
-                env::set_var(self.key, value);
+                // Restore environment variable to its original value.
+                unsafe { env::set_var(self.key, value) };
             } else {
-                env::remove_var(self.key);
+                // Remove temporary environment variable set for a test.
+                unsafe { env::remove_var(self.key) };
             }
         }
+    }
+
+    fn qa_cli_command() -> Command {
+        if let Ok(path) = env::var("CARGO_BIN_EXE_greentic-qa") {
+            return Command::new(path);
+        }
+
+        let mut command = Command::new("cargo");
+        command
+            .arg("run")
+            .arg("-q")
+            .arg("-p")
+            .arg("greentic-qa")
+            .arg("--");
+        command
     }
 
     use crate::builder::{GenerationInput, QuestionInput, build_bundle, write_bundle};
@@ -1780,7 +1798,7 @@ mod tests {
         ];
         let stdin = format!("{}\n", answers.join("\n"));
 
-        let mut cmd = Command::cargo_bin("greentic-qa")?;
+        let mut cmd = qa_cli_command();
         cmd.arg("new")
             .arg("--out")
             .arg(&output_root)

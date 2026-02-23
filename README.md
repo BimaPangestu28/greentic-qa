@@ -40,3 +40,18 @@ greentic-qa/
 - `greentic-qa validate --spec <form.json> --answers <answers.json>` validates stored answers and prints the error summary.
 
 Smoke tests rely on `ci/scripts/smoke.sh`, which reads the fixture above and runs `greentic-qa generate` to build a sample bundle. The generated bundle includes the derived README plus the JSON artifacts that you can reuse in other repositories or packs.
+
+## component-qa compatibility notes
+
+- The interface remains single-version and backward-compatible.
+- Config input accepts:
+  - raw `FormSpec` JSON (legacy/direct)
+  - config envelope with `form_spec_json`
+  - optional `include_registry` (`form_ref -> form spec JSON`) for include expansion.
+- Runtime context accepts:
+  - direct context payload (legacy)
+  - additive envelope style with `ctx` object.
+- i18n rendering can consume:
+  - `ctx.locale`
+  - `ctx.i18n_resolved` map
+  - optional debug flag `ctx.i18n_debug` (or `ctx.debug_i18n`) for card metadata.

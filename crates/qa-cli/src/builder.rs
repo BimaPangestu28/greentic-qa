@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, HashSet},
     fmt, fs, io,
@@ -171,25 +171,31 @@ pub fn build_bundle(input: &GenerationInput) -> Result<GeneratedBundle, String> 
         .map(to_question_spec)
         .collect::<Vec<_>>();
 
-    let presentation = input.summary_md.as_ref().map(|intro| FormPresentation {
-        intro: Some(intro.clone()),
-        theme: None,
+    let presentation = input.summary_md.as_ref().map(|intro| {
+        serde_json::from_value::<FormPresentation>(json!({
+            "intro": intro,
+            "theme": null,
+            "default_locale": null
+        }))
+        .expect("FormPresentation JSON should deserialize")
     });
 
     let progress_policy = Some(compute_progress_policy(input.form.progress_policy.as_ref()));
 
-    let form = FormSpec {
-        id: input.form.id.clone(),
-        title: input.form.title.clone(),
-        version: input.form.version.clone(),
-        description: input.form.description.clone(),
-        presentation,
-        progress_policy,
-        secrets_policy: None,
-        store: Vec::new(),
-        validations: input.validations.clone(),
-        questions,
-    };
+    let form = serde_json::from_value::<FormSpec>(json!({
+        "id": input.form.id,
+        "title": input.form.title,
+        "version": input.form.version,
+        "description": input.form.description,
+        "presentation": presentation,
+        "progress_policy": progress_policy,
+        "secrets_policy": null,
+        "store": [],
+        "validations": input.validations,
+        "includes": [],
+        "questions": questions
+    }))
+    .expect("FormSpec JSON should deserialize");
 
     let answers = Value::Object(Map::new());
     let visibility = resolve_visibility(&form, &answers, VisibilityMode::Visible);
@@ -334,22 +340,25 @@ fn to_question_spec(question: &QuestionInput) -> QuestionSpec {
         fields: list.fields.iter().map(to_question_spec).collect::<Vec<_>>(),
     });
 
-    QuestionSpec {
-        id: question.id.clone(),
-        kind: question.kind.to_question_type(),
-        title: question.title.clone(),
-        description: question.description.clone(),
-        required: question.required,
-        choices,
-        default_value: question.default_value.clone(),
-        secret: question.secret,
-        visible_if: question.visible_if.clone(),
-        constraint: question.constraint.clone(),
-        list,
-        policy: QuestionPolicy::default(),
-        computed: question.computed.clone(),
-        computed_overridable: question.computed_overridable,
-    }
+    serde_json::from_value::<QuestionSpec>(json!({
+        "id": question.id,
+        "type": question.kind.to_question_type(),
+        "title": question.title,
+        "title_i18n": null,
+        "description": question.description,
+        "description_i18n": null,
+        "required": question.required,
+        "choices": choices,
+        "default_value": question.default_value,
+        "secret": question.secret,
+        "visible_if": question.visible_if,
+        "constraint": question.constraint,
+        "list": list,
+        "policy": QuestionPolicy::default(),
+        "computed": question.computed,
+        "computed_overridable": question.computed_overridable
+    }))
+    .expect("QuestionSpec JSON should deserialize")
 }
 
 impl CliQuestionType {

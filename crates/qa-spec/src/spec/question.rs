@@ -1,4 +1,5 @@
 use crate::expr::Expr;
+use crate::i18n::I18nText;
 use crate::store::StoreTarget;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,11 @@ pub struct QuestionSpec {
     pub kind: QuestionType,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_i18n: Option<I18nText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_i18n: Option<I18nText>,
     #[serde(default)]
     pub required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

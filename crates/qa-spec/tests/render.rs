@@ -1,8 +1,12 @@
 use serde_json::json;
+use std::collections::BTreeMap;
 
 use qa_spec::{
     FormSpec,
-    render::{RenderStatus, build_render_payload, render_card, render_json_ui, render_text},
+    render::{
+        RenderStatus, build_render_payload, build_render_payload_with_i18n, render_card,
+        render_json_ui, render_text,
+    },
 };
 
 fn fixture(name: &str) -> &'static str {
@@ -90,4 +94,80 @@ fn render_card_uses_choice_input_for_enum() {
             .iter()
             .any(|item| item["type"].as_str() == Some("Input.ChoiceSet"))
     );
+}
+
+#[test]
+fn render_payload_uses_resolved_i18n_when_provided() {
+    let spec: FormSpec = serde_json::from_value(json!({
+        "id": "i18n-form",
+        "title": "I18n Form",
+        "version": "1.0",
+        "questions": [
+            {
+                "id": "q1",
+                "type": "string",
+                "title": "Fallback title",
+                "title_i18n": { "key": "q1.title" },
+                "description_i18n": { "key": "q1.description" },
+                "required": true
+            }
+        ]
+    }))
+    .expect("deserialize");
+    let mut resolved = BTreeMap::new();
+    resolved.insert("q1.title".into(), "Localized title".into());
+    resolved.insert("q1.description".into(), "Localized description".into());
+
+    let payload = build_render_payload_with_i18n(&spec, &json!({}), &json!({}), Some(&resolved));
+    let question = payload.questions.first().expect("question exists");
+    assert_eq!(question.title, "Localized title");
+    assert_eq!(
+        question.description.as_deref(),
+        Some("Localized description")
+    );
+}
+
+#[test]
+fn render_payload_uses_requested_then_default_locale_then_raw_fallback() {
+    let spec: FormSpec = serde_json::from_value(json!({
+        "id": "locale-form",
+        "title": "Locale Form",
+        "version": "1.0",
+        "presentation": {
+            "default_locale": "pt-BR"
+        },
+        "questions": [
+            {
+                "id": "q1",
+                "type": "string",
+                "title": "Raw fallback",
+                "title_i18n": { "key": "q1.title" },
+                "required": true
+            }
+        ]
+    }))
+    .expect("deserialize");
+    let mut resolved = BTreeMap::new();
+    resolved.insert("en-US:q1.title".into(), "English title".into());
+    resolved.insert("pt-BR:q1.title".into(), "Titulo".into());
+
+    let payload_en = build_render_payload_with_i18n(
+        &spec,
+        &json!({ "locale": "en-US" }),
+        &json!({}),
+        Some(&resolved),
+    );
+    assert_eq!(payload_en.questions[0].title, "English title");
+
+    let payload_default =
+        build_render_payload_with_i18n(&spec, &json!({}), &json!({}), Some(&resolved));
+    assert_eq!(payload_default.questions[0].title, "Titulo");
+
+    let payload_raw = build_render_payload_with_i18n(
+        &spec,
+        &json!({ "locale": "fr-FR" }),
+        &json!({}),
+        Some(&BTreeMap::new()),
+    );
+    assert_eq!(payload_raw.questions[0].title, "Raw fallback");
 }

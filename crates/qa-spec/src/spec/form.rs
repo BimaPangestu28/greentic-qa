@@ -11,6 +11,8 @@ pub struct FormPresentation {
     pub intro: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_locale: Option<String>,
 }
 
 /// Execution policies shared by question navigation.
@@ -39,6 +41,14 @@ pub struct SecretsPolicy {
     pub deny: Vec<String>,
 }
 
+/// Include reference for composing forms from a registry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct IncludeSpec {
+    pub form_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
 /// Top-level QA form definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FormSpec {
@@ -57,5 +67,7 @@ pub struct FormSpec {
     pub store: Vec<StoreOp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub validations: Vec<CrossFieldValidation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<IncludeSpec>,
     pub questions: Vec<QuestionSpec>,
 }

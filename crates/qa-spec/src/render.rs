@@ -3,6 +3,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     answers_schema,
     computed::apply_computed_answers,
+    i18n::{ResolvedI18nMap, resolve_i18n_text_with_locale},
     progress::{ProgressContext, next_question},
     spec::{
         form::FormSpec,
@@ -46,6 +47,8 @@ pub struct RenderQuestion {
     pub id: String,
     pub title: String,
     pub description: Option<String>,
+    pub title_i18n_key: Option<String>,
+    pub description_i18n_key: Option<String>,
     pub kind: QuestionType,
     pub required: bool,
     pub default: Option<String>,
@@ -72,6 +75,16 @@ pub struct RenderPayload {
 
 /// Build the renderer payload from the specification, context, and answers.
 pub fn build_render_payload(spec: &FormSpec, ctx: &Value, answers: &Value) -> RenderPayload {
+    build_render_payload_with_i18n(spec, ctx, answers, None)
+}
+
+/// Build the renderer payload from the specification, context, and answers with optional i18n map.
+pub fn build_render_payload_with_i18n(
+    spec: &FormSpec,
+    ctx: &Value,
+    answers: &Value,
+    resolved_i18n: Option<&ResolvedI18nMap>,
+) -> RenderPayload {
     let computed_answers = apply_computed_answers(spec, answers);
     let visibility = resolve_visibility(spec, &computed_answers, VisibilityMode::Visible);
     let progress_ctx = ProgressContext::new(computed_answers.clone(), ctx);
@@ -80,13 +93,36 @@ pub fn build_render_payload(spec: &FormSpec, ctx: &Value, answers: &Value) -> Re
     let answered = progress_ctx.answered_count(spec, &visibility);
     let total = visibility.values().filter(|visible| **visible).count();
 
+    let requested_locale = ctx.get("locale").and_then(Value::as_str);
+    let default_locale = spec
+        .presentation
+        .as_ref()
+        .and_then(|presentation| presentation.default_locale.as_deref());
+
     let questions = spec
         .questions
         .iter()
         .map(|question| RenderQuestion {
             id: question.id.clone(),
-            title: question.title.clone(),
-            description: question.description.clone(),
+            title: resolve_i18n_text_with_locale(
+                &question.title,
+                question.title_i18n.as_ref(),
+                resolved_i18n,
+                requested_locale,
+                default_locale,
+            ),
+            description: resolve_description(
+                question.description.as_deref(),
+                question.description_i18n.as_ref(),
+                resolved_i18n,
+                requested_locale,
+                default_locale,
+            ),
+            title_i18n_key: question.title_i18n.as_ref().map(|text| text.key.clone()),
+            description_i18n_key: question
+                .description_i18n
+                .as_ref()
+                .map(|text| text.key.clone()),
             kind: question.kind,
             required: question.required,
             default: question.default_value.clone(),
@@ -428,5 +464,37 @@ fn value_to_display(value: &Value) -> String {
         Value::Bool(flag) => flag.to_string(),
         Value::Number(num) => num.to_string(),
         other => other.to_string(),
+    }
+}
+
+fn resolve_description(
+    fallback: Option<&str>,
+    text: Option<&crate::i18n::I18nText>,
+    resolved: Option<&ResolvedI18nMap>,
+    requested_locale: Option<&str>,
+    default_locale: Option<&str>,
+) -> Option<String> {
+    match (fallback, text) {
+        (Some(raw), _) => Some(resolve_i18n_text_with_locale(
+            raw,
+            text,
+            resolved,
+            requested_locale,
+            default_locale,
+        )),
+        (None, Some(i18n_text)) => {
+            let resolved_text = resolve_i18n_text_with_locale(
+                &i18n_text.key,
+                Some(i18n_text),
+                resolved,
+                requested_locale,
+                default_locale,
+            );
+            if resolved_text != i18n_text.key {
+                return Some(resolved_text);
+            }
+            Some(i18n_text.key.clone())
+        }
+        (None, None) => None,
     }
 }
