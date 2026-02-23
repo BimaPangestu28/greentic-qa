@@ -12,6 +12,8 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    env:
+      GHCR_OWNER: ${{ vars.GHCR_OWNER || github.repository_owner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,7 +77,7 @@ jobs:
       - name: Push OCI artifact to GHCR
         if: github.ref == 'refs/heads/master'
         env:
-          IMAGE: ghcr.io/greentic-ai/components/component-qa
+          IMAGE: ghcr.io/${{ env.GHCR_OWNER }}/components/component-qa
         run: |
           VERSION=$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name=="component-qa") | .version')
           oras push "${IMAGE}:latest" \
