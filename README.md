@@ -41,6 +41,15 @@ greentic-qa/
 
 Smoke tests rely on `ci/scripts/smoke.sh`, which reads the fixture above and runs `greentic-qa generate` to build a sample bundle. The generated bundle includes the derived README plus the JSON artifacts that you can reuse in other repositories or packs.
 
+## Documentation
+
+Additional documentation is available in the `docs/` directory:
+
+- [Demo Bundle Guide](docs/demo-bundle.md) - How to create and run demo bundles with greentic-operator
+- [Frontends](docs/frontends.md) - Frontend integration guide
+- [i18n](docs/i18n.md) - Internationalization support
+- [Audit Frontends](docs/audit-frontends.md) - Audit and compliance
+
 ## component-qa compatibility notes
 
 - The interface remains single-version and backward-compatible.
