@@ -2,18 +2,36 @@
 name = "component-qa"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-authors = ["Greentic AI <dev@greentic.ai>"]
-description = "WASM component hosting QA flows."
 license = "MIT"
+rust-version.workspace = true
+description = "WASM component hosting QA flows."
 repository = "https://github.com/greentic-ai/greentic-qa"
+build = "build.rs"
 homepage = "https://github.com/greentic-ai/greentic-qa"
+authors = ["Greentic AI <dev@greentic.ai>"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[package.metadata.component]
+package = "greentic:component"
+
+[package.metadata.component.target]
+world = "greentic:component/component@0.6.0"
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-qa-spec = { workspace = true }
 thiserror = { workspace = true }
+qa-spec = { workspace = true }
+greentic-types = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }
+greentic-types = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = { workspace = true, features = ["macros", "realloc"] }

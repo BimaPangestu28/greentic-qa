@@ -1,0 +1,217 @@
+{
+  "$schema": "https://greentic-ai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
+  "artifacts": {
+    "component_wasm": "target/wasm32-wasip2/release/component_qa.wasm"
+  },
+  "capabilities": {
+    "host": {
+      "messaging": {
+        "inbound": true,
+        "outbound": true
+      },
+      "secrets": {
+        "required": []
+      },
+      "telemetry": {
+        "scope": "node"
+      }
+    },
+    "wasi": {
+      "clocks": true,
+      "filesystem": {
+        "mode": "none",
+        "mounts": []
+      },
+      "random": true
+    }
+  },
+  "config_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+  },
+  "default_operation": "handle_message",
+  "describe_export": "describe",
+  "dev_flows": {
+    "custom": {
+      "format": "flow-ir-json",
+      "graph": {
+        "description": "Auto-generated custom config for ai.greentic.component-qa",
+        "id": "ai.greentic.component-qa.custom",
+        "kind": "component-config",
+        "nodes": {
+          "ask_config": {
+            "questions": {
+              "fields": [
+                {
+                  "default": "Hello from component-qa!",
+                  "id": "input",
+                  "prompt": "Opaque payload forwarded to handle",
+                  "type": "string"
+                }
+              ]
+            },
+            "routing": [
+              {
+                "to": "emit_config"
+              }
+            ]
+          },
+          "emit_config": {
+            "template": "{\n  \"node_id\": \"component-qa\",\n  \"node\": {\n    \"handle_message\": {\n      \"input\": {\n        \"input\": \"{{state.input}}\"\n      }\n    },\n    \"routing\": [\n      { \"to\": \"NEXT_NODE_PLACEHOLDER\" }\n    ]\n  }\n}"
+          }
+        }
+      }
+    },
+    "default": {
+      "format": "flow-ir-json",
+      "graph": {
+        "description": "Auto-generated default config for ai.greentic.component-qa",
+        "id": "ai.greentic.component-qa.default",
+        "kind": "component-config",
+        "nodes": {
+          "emit_config": {
+            "template": "{\n  \"node_id\": \"component-qa\",\n  \"node\": {\n    \"handle_message\": {\n      \"input\": {\n        \"input\": \"Hello from component-qa!\"\n      }\n    },\n    \"routing\": [\n      { \"to\": \"NEXT_NODE_PLACEHOLDER\" }\n    ]\n  }\n}"
+          }
+        }
+      }
+    }
+  },
+  "hashes": {
+    "component_wasm": "blake3:dded92df3bdcefe1adeec9c3525db35cd27ddfb984efd3572eaa2847db2cda7a"
+  },
+  "id": "ai.greentic.component-qa",
+  "limits": {
+    "memory_mb": 128,
+    "wall_time_ms": 1000
+  },
+  "name": "component-qa",
+  "operations": [
+    {
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "input": {
+            "default": "Hello from component-qa!",
+            "description": "Opaque payload forwarded to handle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input"
+        ],
+        "title": "component-qa handle input",
+        "type": "object"
+      },
+      "name": "handle_message",
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "message": {
+            "default": "Handled by component-qa",
+            "description": "Response returned by the handle entry point",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "component-qa handle output",
+        "type": "object"
+      }
+    },
+    {
+      "input_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "qa-spec",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "input_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "answers": {
+            "type": "object"
+          },
+          "current_config": {
+            "type": "object"
+          },
+          "mode": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "apply-answers",
+      "output_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "config": {
+            "type": "object"
+          },
+          "errors": {
+            "type": "array"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok",
+          "warnings",
+          "errors"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "input_schema": {
+        "additionalProperties": true,
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "i18n-keys",
+      "output_schema": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    }
+  ],
+  "profiles": {
+    "default": "stateless",
+    "supported": [
+      "stateless"
+    ]
+  },
+  "secret_requirements": [],
+  "supports": [
+    "messaging"
+  ],
+  "version": "0.4.6",
+  "world": "greentic:component/component@0.6.0"
+}

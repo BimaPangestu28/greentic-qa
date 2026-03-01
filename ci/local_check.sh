@@ -14,10 +14,6 @@ crates=(
 )
 
 for crate in "${crates[@]}"; do
-  if [[ "$crate" == "crates/qa-cli" ]]; then
-    echo "Skipping package/publish dry-run for $crate until greentic-qa-lib is published."
-    continue
-  fi
   echo "Local dry-run publish for $crate"
   cargo package \
     --manifest-path "$crate/Cargo.toml" \
