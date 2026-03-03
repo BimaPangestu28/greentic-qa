@@ -4,6 +4,7 @@ pub mod answers;
 pub mod answers_schema;
 pub mod compose;
 pub mod computed;
+pub mod convert;
 pub mod examples;
 pub mod expr;
 pub mod frontend;
@@ -43,3 +44,8 @@ pub use template::{
 };
 pub use validate::validate;
 pub use visibility::{VisibilityMap, VisibilityMode, resolve_visibility};
+
+pub use convert::{
+    QaMode, build_setup_flow_input, capitalize, infer_question_properties, is_valid_identifier,
+    make_minimal_form_spec, parse_mode, push_synthetic_question, resolve_gmap_path,
+};
