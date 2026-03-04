@@ -196,11 +196,7 @@ pub fn build_setup_flow_input(
 // ── Path helpers ────────────────────────────────────────────────────────────
 
 /// Resolve the gmap file path for a tenant/team.
-pub fn resolve_gmap_path(
-    bundle_root: &Path,
-    tenant: &str,
-    team: Option<&str>,
-) -> PathBuf {
+pub fn resolve_gmap_path(bundle_root: &Path, tenant: &str, team: Option<&str>) -> PathBuf {
     match team {
         Some(team) if team != "_" => bundle_root
             .join("tenants")
@@ -208,10 +204,7 @@ pub fn resolve_gmap_path(
             .join("teams")
             .join(team)
             .join("team.gmap"),
-        _ => bundle_root
-            .join("tenants")
-            .join(tenant)
-            .join("tenant.gmap"),
+        _ => bundle_root.join("tenants").join(tenant).join("tenant.gmap"),
     }
 }
 
@@ -221,8 +214,7 @@ pub fn resolve_gmap_path(
 /// no leading/trailing hyphens.
 pub fn is_valid_identifier(s: &str) -> bool {
     !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         && !s.starts_with('-')
         && !s.ends_with('-')
 }
@@ -341,8 +333,7 @@ mod tests {
     #[test]
     fn build_setup_flow_input_basic() {
         let config = json!({"token": "abc"});
-        let input =
-            build_setup_flow_input("messaging-telegram", "default", None, None, &config);
+        let input = build_setup_flow_input("messaging-telegram", "default", None, None, &config);
         assert_eq!(input["id"], "messaging-telegram");
         assert_eq!(input["tenant"], "default");
         assert_eq!(input["team"], "_");
@@ -361,9 +352,6 @@ mod tests {
         );
         assert_eq!(input["team"], "sales");
         assert_eq!(input["public_base_url"], "https://example.com");
-        assert_eq!(
-            input["config"]["public_base_url"],
-            "https://example.com"
-        );
+        assert_eq!(input["config"]["public_base_url"], "https://example.com");
     }
 }
