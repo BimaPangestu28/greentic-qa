@@ -35,7 +35,7 @@ demo-bundle/
 ### 1. Scaffold a New Bundle
 
 ```bash
-greentic-operator demo new my-demo-bundle
+gtc op demo new my-demo-bundle
 cd my-demo-bundle
 ```
 
@@ -70,13 +70,13 @@ messaging:
 ### Basic Start
 
 ```bash
-greentic-operator demo start --bundle . --setup-input setup-telegram.yaml --cloudflared off --env dev --tenant dev
+gtc op demo start --bundle . --setup-input setup-telegram.yaml --cloudflared off --env dev --tenant dev
 ```
 
 ### With Cloudflare Tunnel (Auto)
 
 ```bash
-greentic-operator demo start --bundle . --setup-input setup-telegram.yaml --env dev --tenant dev
+gtc op demo start --bundle . --setup-input setup-telegram.yaml --env dev --tenant dev
 ```
 
 ### Command Options
@@ -95,32 +95,32 @@ greentic-operator demo start --bundle . --setup-input setup-telegram.yaml --env 
 
 ### List Packs
 ```bash
-greentic-operator demo list-packs --bundle .
+gtc op demo list-packs --bundle .
 ```
 
 ### List Flows
 ```bash
-greentic-operator demo list-flows --bundle . --pack messaging-telegram
+gtc op demo list-flows --bundle . --pack messaging-telegram
 ```
 
 ### Check Status
 ```bash
-greentic-operator demo status --bundle .
+gtc op demo status --bundle .
 ```
 
 ### View Logs
 ```bash
-greentic-operator demo logs --bundle .
+gtc op demo logs --bundle .
 ```
 
 ### Send Test Message
 ```bash
-greentic-operator demo send --bundle . --provider messaging-telegram --message "Hello"
+gtc op demo send --bundle . --provider messaging-telegram --message "Hello"
 ```
 
 ### Run Diagnostics
 ```bash
-greentic-operator demo run --bundle . --pack messaging-telegram --flow diagnostics
+gtc op demo run --bundle . --pack messaging-telegram --flow diagnostics
 ```
 
 ## Provider-Specific Setup
@@ -187,7 +187,7 @@ messaging:
 
 Use `--env dev --tenant dev`:
 ```bash
-greentic-operator demo start --bundle . --setup-input setup.yaml --env dev --tenant dev
+gtc op demo start --bundle . --setup-input setup.yaml --env dev --tenant dev
 ```
 
 ### Error: "unknown domain 'messaging-telegram'"
@@ -214,7 +214,7 @@ packs/messaging-telegram.gtpack
 
 Run list-packs to verify detection:
 ```bash
-greentic-operator demo list-packs --bundle .
+gtc op demo list-packs --bundle .
 ```
 
 ## Architecture
